@@ -8,6 +8,9 @@ import {
   NegotiationState,
   LogisticsDispatch,
   ThemeMode,
+  AppView,
+  ProductComparison,
+  NegotiationPolicyReport,
 } from "../types";
 import { INITIAL_PRODUCTS } from "../data/catalog";
 import { THEME_PRESETS } from "../data/themes";
@@ -34,8 +37,8 @@ interface AppContextType {
   cartSubtotal: number;
   activeDiscountPct: number;
   cartTotal: number;
-  currentView: "store" | "studio" | "agent_hud" | "inspector";
-  setCurrentView: (view: "store" | "studio" | "agent_hud" | "inspector") => void;
+  currentView: AppView;
+  setCurrentView: (view: AppView) => void;
   
   // Theme & Design state
   theme: ThemeMode;
@@ -57,8 +60,14 @@ interface AppContextType {
     engravingFont: string;
   }>>;
   
-  // Negotiation state
+  // Product Comparison state
+  activeComparison: ProductComparison | null;
+  setActiveComparison: (comp: ProductComparison | null) => void;
+  compareProducts: (productIds: string[], criteria?: string[]) => ProductComparison;
+
+  // Negotiation state & policy report
   negotiation: NegotiationState;
+  negotiationReport: NegotiationPolicyReport | null;
   startNegotiation: (requestedPct: number, reason: string) => Promise<any>;
   acceptNegotiationOffer: () => void;
   resetNegotiation: () => void;
@@ -100,7 +109,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       },
     },
   ]);
-  const [currentView, setCurrentView] = useState<"store" | "studio" | "agent_hud" | "inspector">("store");
+  const [currentView, setCurrentView] = useState<AppView>("store");
+  const [activeComparison, setActiveComparison] = useState<ProductComparison | null>(null);
+  const [negotiationReport, setNegotiationReport] = useState<NegotiationPolicyReport | null>(null);
+
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("auracommerce_theme") as ThemeMode;
@@ -290,57 +302,112 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   });
 
-  // Dynamic Negotiation with Monotonic, continuous pricing math
+  // Product Comparison Engine
+  const compareProducts = useCallback((productIds: string[], criteria?: string[]): ProductComparison => {
+    const catalog = stateRef.current.products;
+    const matchingProds = catalog.filter((p) => productIds.includes(p.id));
+    const activeList = matchingProds.length >= 2 ? matchingProds : catalog.slice(0, 3);
+    
+    const defaultCriteria = criteria && criteria.length > 0
+      ? criteria
+      : ["Retail Price ($USD)", "Chassis Material & Build", "Customer Rating (★)", "Connectivity", "Carbon Footprint (kg)", "Warranty Coverage"];
+
+    // Multi-factor ranking: price-to-spec value, rating, carbon efficiency
+    const ranked = activeList
+      .map((p) => {
+        const valueScore = (p.rating * 25) + ((1500 - p.price) / 30) - (p.carbonKg * 3);
+        return { product: p, score: valueScore };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    const winner = ranked[0].product;
+    const medals = ["🥇 Best Overall Value", "🥈 High-Performance Spec", "🥉 Budget / Specialist Choice", "4th Pick"];
+
+    const comparisonData: ProductComparison = {
+      products: activeList,
+      criteria: defaultCriteria,
+      recommendation: {
+        winnerId: winner.id,
+        winnerName: winner.name,
+        rationale: `We recommend ${winner.name} as the leading choice based on its ${winner.rating}★ rating, high-grade ${winner.specs.material} architecture, and exceptional $${winner.price} pricing.`,
+        rankings: ranked.map((r, idx) => ({
+          productId: r.product.id,
+          rank: idx + 1,
+          medal: medals[idx] || `#${idx + 1} Selection`,
+          highlight: idx === 0 ? "Highest aggregate value & engineering score" : `${r.product.specs.material} with ${r.product.specs.warranty}`,
+        })),
+      },
+    };
+
+    setActiveComparison(comparisonData);
+    setCurrentView("compare");
+    return comparisonData;
+  }, []);
+
+  // Dynamic Algorithmic Negotiation Engine with Transparent Policy Math
   const startNegotiation = useCallback(async (requestedPct: number, reason: string) => {
     setNegotiation((prev) => ({ ...prev, status: "negotiating" }));
     
-    // Simulate smart dynamic pricing tier evaluation
+    // Simulate smart dynamic pricing tier calculation
     await new Promise((res) => setTimeout(res, 600));
 
     const req = Math.max(1, Math.min(30, Math.round(requestedPct)));
     const curSubtotal = stateRef.current.cartSubtotal;
-    const curCartLength = stateRef.current.cart.length;
+    const totalUnits = stateRef.current.cart.reduce((sum, item) => sum + item.quantity, 0);
+
+    // Hard retail margin safety ceiling (D_max <= 28%)
+    const MARGIN_SAFETY_CEILING_PCT = 28;
+
+    // Policy Tier Calculation
+    let bulkTier: "Standard" | "Small Batch (3+)" | "Enterprise Volume (10+)";
+    let eligibleDiscountMaxPct: number;
+
+    if (totalUnits >= 10 || curSubtotal >= 2000) {
+      bulkTier = "Enterprise Volume (10+)";
+      eligibleDiscountMaxPct = 25;
+    } else if (totalUnits >= 3 || curSubtotal >= 800) {
+      bulkTier = "Small Batch (3+)";
+      eligibleDiscountMaxPct = 18;
+    } else {
+      bulkTier = "Standard";
+      eligibleDiscountMaxPct = 12;
+    }
 
     let approvedPct: number;
     let storeReason: string;
+    let isWithinPolicy = true;
 
-    // High volume / enterprise order (>= 3 items or >= $1000)
-    if (curSubtotal >= 1000 || curCartLength >= 3) {
-      if (req <= 20) {
-        approvedPct = req;
-        storeReason = `Enterprise Volume Tier: Requested ${req}% discount fully approved for bulk hardware cart.`;
-      } else {
-        // Continuous smooth curve up to 25% max
-        approvedPct = Math.min(25, 20 + Math.floor((req - 20) * 0.5));
-        storeReason = `Enterprise Volume Tier: Counter-offered ${approvedPct}% (maximum allowable bulk allowance).`;
-      }
+    if (req <= eligibleDiscountMaxPct) {
+      approvedPct = req;
+      storeReason = `${bulkTier} Policy: Requested ${req}% discount is fully approved under standard margin policy.`;
     } else {
-      // Standard retail cart: monotonic curve, NO perverse discontinuities
-      if (req <= 10) {
-        approvedPct = req;
-        storeReason = `Standard promotional allowance: ${approvedPct}% discount applied directly.`;
-      } else if (req <= 15) {
-        // 11-15% -> 10% + 60% of excess
-        approvedPct = 10 + Math.floor((req - 10) * 0.6);
-        storeReason = `Algorithmic Counter-Offer: Granted ${approvedPct}% discount based on single-cart margin analysis.`;
-      } else if (req <= 20) {
-        // 16-20% -> 13% + 40% of excess over 15
-        approvedPct = 13 + Math.floor((req - 15) * 0.4);
-        storeReason = `Algorithmic Counter-Offer: Granted ${approvedPct}% discount with free carbon-neutral orbital freight.`;
-      } else {
-        // > 20% capped smoothly at 15% max for single retail units
-        approvedPct = 15;
-        storeReason = `Counter-Offer Cap: Maximum retail incentive is 15% for single-unit orders (add 3+ items for enterprise 25% tier).`;
-      }
+      isWithinPolicy = false;
+      approvedPct = Math.min(MARGIN_SAFETY_CEILING_PCT, eligibleDiscountMaxPct);
+      storeReason = `Algorithmic Counter-Proposal: Requested ${req}% exceeds tier ceiling. Counter-offered authorized maximum of ${approvedPct}% for current cart volume.`;
     }
 
     const discountedTotal = Math.max(0, Math.round(curSubtotal * (1 - approvedPct / 100)));
+
+    const policyReport: NegotiationPolicyReport = {
+      cartTotal: curSubtotal,
+      itemCount: totalUnits,
+      bulkTier,
+      eligibleDiscountMaxPct,
+      requestedDiscountPct: req,
+      approvedDiscountPct: approvedPct,
+      marginSafetyFloorPct: 72, // 100 - 28% max
+      isWithinPolicy,
+      policyRationale: storeReason,
+    };
+
+    setNegotiationReport(policyReport);
 
     const result = {
       originalTotal: curSubtotal,
       offeredDiscountPct: approvedPct,
       discountedTotal,
       status: (approvedPct === req ? "accepted" : "countered") as "accepted" | "countered",
+      policyReport,
       history: [
         ...stateRef.current.negotiation.history,
         {
@@ -453,6 +520,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
           warehouseAvailability: prod.warehouseStock,
           customizableOptions: prod.customization || null,
         };
+      },
+    });
+
+    // 3. compare_products (NEW WEBMCP COMPARISON TOOL)
+    host.registerTool({
+      name: "compare_products",
+      description: "Compare 2 to 4 hardware products side-by-side on specifications, prices, stock, ratings, and carbon metrics with automated AI ranking.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          productIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of 2-4 product IDs to compare (e.g., ['prod-keyboard-01', 'prod-mouse-06'])",
+          },
+          criteria: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional custom criteria to evaluate",
+          },
+        },
+        required: ["productIds"],
+      },
+      execute: async (input: { productIds: string[]; criteria?: string[] }) => {
+        const comparisonResult = compareProducts(input.productIds, input.criteria);
+        triggerSpotlight("compare-view-matrix");
+        return comparisonResult;
       },
     });
 
@@ -965,9 +1059,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         customConfig,
         setCustomConfig,
         negotiation,
+        negotiationReport,
         startNegotiation,
         acceptNegotiationOffer,
         resetNegotiation,
+        activeComparison,
+        setActiveComparison,
+        compareProducts,
         pendingConfirmation,
         resolveConfirmation,
         lastHumanApproval,

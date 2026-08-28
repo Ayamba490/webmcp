@@ -7,6 +7,9 @@ import {
   Terminal,
   Layers,
   Radio,
+  BarChart3,
+  Columns,
+  HelpCircle,
 } from "lucide-react";
 
 interface HeaderProps {
@@ -29,7 +32,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
           : "border-white/10 bg-[#050505]/95 text-white"
       }`}
     >
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-8">
+      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3.5 sm:px-8">
         {/* Brand & WebMCP Spec Tag */}
         <div className="flex items-center gap-4">
           <button
@@ -50,7 +53,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-heading font-black tracking-tight text-lg uppercase">
+                <span className="font-heading font-black tracking-tight text-base sm:text-lg uppercase">
                   AuraCommerce
                 </span>
                 <span className="rounded bg-[#6366F1]/20 px-2 py-0.5 text-[9px] font-mono font-bold text-[#6366F1] border border-[#6366F1]/40 uppercase tracking-wider">
@@ -64,7 +67,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
           </button>
 
           {/* Live WebMCP Context Status Badge */}
-          <div className="hidden lg:flex items-center gap-2 rounded-full border border-current/15 bg-current/[0.03] px-3.5 py-1 text-xs">
+          <div className="hidden xl:flex items-center gap-2 rounded-full border border-current/15 bg-current/[0.03] px-3.5 py-1 text-xs">
             <span className="w-2 h-2 rounded-full bg-[#00FF00] shadow-[0_0_8px_#00FF00]"></span>
             <span className="font-mono text-[11px] opacity-80 font-bold">document.modelContext</span>
             <span className="text-[#00FF00] font-mono text-[10px] font-bold">● ACTIVE (13)</span>
@@ -72,10 +75,13 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
         </div>
 
         {/* Navigation Tabs */}
-        <nav className="flex items-center gap-2 sm:gap-4 overflow-x-auto py-1">
+        <nav className="flex items-center gap-1 sm:gap-2 overflow-x-auto py-1">
           {[
             { id: "store", label: "Storefront", icon: Layers },
             { id: "studio", label: "Studio", icon: Sparkles },
+            { id: "compare", label: "Compare", icon: Columns },
+            { id: "benchmark", label: "Benchmarks", icon: BarChart3 },
+            { id: "why_webmcp", label: "Why WebMCP", icon: HelpCircle },
             { id: "agent_hud", label: "Agent HUD", icon: Radio },
             { id: "inspector", label: "Inspector", icon: Terminal },
           ].map((tab) => {
@@ -86,11 +92,11 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
                 key={tab.id}
                 id={`nav-tab-${tab.id}`}
                 onClick={() => setCurrentView(tab.id as any)}
-                className={`flex items-center gap-1.5 py-1.5 px-3 text-[10px] uppercase tracking-[0.2em] font-bold transition-all cursor-pointer ${
+                className={`flex items-center gap-1.5 py-1.5 px-2.5 text-[10px] uppercase tracking-[0.15em] font-bold transition-all cursor-pointer whitespace-nowrap ${
                   isActive
                     ? theme === "clean_light"
                       ? "text-indigo-600 border-b-2 border-indigo-600 pb-1 bg-indigo-50/50"
-                      : "text-white border-b-2 border-[#6366F1] pb-1 bg-white/[0.04]"
+                      : "text-white border-b-2 border-[#6366F1] pb-1 bg-white/[0.06]"
                     : "opacity-60 hover:opacity-100 hover:bg-current/[0.04]"
                 }`}
               >
@@ -102,7 +108,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
         </nav>
 
         {/* Right Controls: Theme Selector & Cart Trigger */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           {/* Theme & Design Switcher Section */}
           <ThemeSelector />
 
@@ -110,7 +116,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
           <button
             id="header-cart-btn"
             onClick={onOpenCart}
-            className={`relative flex items-center gap-2 border px-4 py-2 text-xs uppercase tracking-widest font-bold transition-all active:scale-95 cursor-pointer ${
+            className={`relative flex items-center gap-2 border px-3 sm:px-4 py-2 text-xs uppercase tracking-widest font-bold transition-all active:scale-95 cursor-pointer ${
               theme === "clean_light"
                 ? "border-slate-300 bg-white hover:bg-slate-50 text-slate-900 shadow-sm"
                 : "border-white/20 bg-white/5 hover:bg-white/10 hover:border-white text-white"
@@ -134,3 +140,4 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
     </header>
   );
 };
+

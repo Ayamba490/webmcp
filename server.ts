@@ -3,6 +3,8 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import { INITIAL_PRODUCTS } from "./src/data/catalog";
+import { SECURITY_PERMISSION_TIERS } from "./src/data/benchmarks";
 
 dotenv.config();
 
@@ -11,7 +13,25 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// JSON error handling middleware for malformed payloads (Bug 6 fix)
+// Strict WebMCP Allowed Tool Registry
+const ALLOWED_WEBMCP_TOOLS = new Set([
+  "search_catalog",
+  "inspect_product_details",
+  "compare_products",
+  "customize_product_spec",
+  "add_to_cart",
+  "stage_procurement_bundle",
+  "negotiate_price_discount",
+  "simulate_supply_chain_dispatch",
+  "request_human_confirmation",
+  "execute_smart_checkout",
+  "trigger_ui_highlight",
+  "query_live_metrics",
+  "stream_agent_scratchpad",
+  "set_app_theme",
+]);
+
+// JSON error handling middleware for malformed payloads
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (err instanceof SyntaxError && "body" in err) {
     return res.status(400).json({
@@ -27,7 +47,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.warn("GEMINI_API_KEY is not set. Operating in high-precision local deterministic agent mode.");
+    console.warn("GEMINI_API_KEY is not set. Operating in high-precision local catalog-driven agent mode.");
     return null;
   }
   return new GoogleGenAI({
@@ -47,11 +67,67 @@ app.get("/api/health", (req, res) => {
     spec: "WebMCP (Model Context Protocol for Web)",
     version: "1.0.0-draft",
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
+    registeredToolsCount: ALLOWED_WEBMCP_TOOLS.size,
     timestamp: new Date().toISOString(),
   });
 });
 
-// Agent execution endpoint (orchestrator)
+// Security & Schema Validator for Agent Tool Steps
+function validateAndSanitizeToolPlan(steps: any[], declaredTools: any[]): { validatedSteps: any[]; validationErrors: string[] } {
+  const declaredToolNames = new Set(
+    (declaredTools || []).map((t: any) => (typeof t === "string" ? t : t.name)).filter(Boolean)
+  );
+
+  const validatedSteps: any[] = [];
+  const validationErrors: string[] = [];
+
+  for (const step of steps || []) {
+    if (!step || typeof step !== "object") {
+      validationErrors.push("Encountered non-object step in plan.");
+      continue;
+    }
+
+    const toolName = step.tool || step.name;
+    if (!toolName || typeof toolName !== "string") {
+      validationErrors.push("Step missing valid 'tool' string identifier.");
+      continue;
+    }
+
+    // 1. Tool Allowlist Check
+    if (!ALLOWED_WEBMCP_TOOLS.has(toolName)) {
+      validationErrors.push(`SECURITY REJECTION: Tool '${toolName}' is not in WebMCP allowed registry.`);
+      continue;
+    }
+
+    // 2. Declared Tool Check
+    if (declaredToolNames.size > 0 && !declaredToolNames.has(toolName)) {
+      validationErrors.push(`Tool '${toolName}' is not currently exposed in document.modelContext.`);
+      continue;
+    }
+
+    // 3. Determine Security Tier
+    let securityTier = "GREEN_AUTO";
+    if (SECURITY_PERMISSION_TIERS.RED_HITL_REQUIRED.tools.includes(toolName)) {
+      securityTier = "RED_HITL_REQUIRED";
+    } else if (SECURITY_PERMISSION_TIERS.YELLOW_GUARDRAILED.tools.includes(toolName)) {
+      securityTier = "YELLOW_GUARDRAILED";
+    }
+
+    // 4. Schema Arguments Sanitization
+    const args = step.args && typeof step.args === "object" ? { ...step.args } : {};
+
+    validatedSteps.push({
+      tool: toolName,
+      args,
+      purpose: step.purpose || `Execute WebMCP ${toolName}`,
+      securityTier,
+    });
+  }
+
+  return { validatedSteps, validationErrors };
+}
+
+// Agent execution endpoint (orchestrator with validation guardrails)
 app.post("/api/agent/run", async (req, res) => {
   try {
     const { prompt, tools, contextState } = req.body;
@@ -63,12 +139,16 @@ app.post("/api/agent/run", async (req, res) => {
     const ai = getGeminiClient();
 
     if (!ai) {
-      // Fallback local smart heuristic planner if API key not present
-      const heuristicPlan = generateLocalHeuristicPlan(prompt, tools, contextState);
+      // Dynamic catalog-driven heuristic planner
+      const dynamicPlan = generateCatalogDrivenPlan(prompt, tools, contextState);
+      const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan(dynamicPlan, tools);
+
       return res.json({
-        thought: `Synthesized intent for "${prompt}". Formulated ${heuristicPlan.length} WebMCP tool calls on document.modelContext.`,
-        steps: heuristicPlan,
-        messageToUser: `Executing autonomous workflow for "${prompt}" across document.modelContext.`,
+        thought: `Synthesized intent for "${prompt}". Formulated ${validatedSteps.length} verified WebMCP tool calls on document.modelContext.`,
+        steps: validatedSteps,
+        validationErrors,
+        messageToUser: `Executing catalog-driven autonomous workflow for "${prompt}" across document.modelContext.`,
+        securityValidated: true,
       });
     }
 
@@ -82,6 +162,9 @@ ${JSON.stringify(tools || [], null, 2)}
 
 Current page state:
 ${JSON.stringify(contextState || {}, null, 2)}
+
+Available product catalog:
+${JSON.stringify(INITIAL_PRODUCTS.map((p) => ({ id: p.id, name: p.name, category: p.category, price: p.price, rating: p.rating, stock: p.stock })), null, 2)}
 
 Respond with a JSON object containing:
 {
@@ -106,23 +189,38 @@ Respond with a JSON object containing:
     });
 
     const outputText = response.text || "{}";
-    let parsedResult;
+    let parsedResult: any;
     try {
       parsedResult = JSON.parse(outputText);
     } catch {
       parsedResult = {
         thought: "Processed user request and formulated WebMCP tool calls.",
-        steps: generateLocalHeuristicPlan(prompt, tools, contextState),
+        steps: generateCatalogDrivenPlan(prompt, tools, contextState),
         messageToUser: outputText,
       };
     }
 
-    res.json(parsedResult);
+    // Pass through Tool Execution & Schema Validator
+    const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan(parsedResult.steps || [], tools);
+
+    res.json({
+      thought: parsedResult.thought || `WebMCP reasoning formulated for: ${prompt}`,
+      steps: validatedSteps,
+      validationErrors,
+      messageToUser: parsedResult.messageToUser || "Executing verified WebMCP tool chain.",
+      securityValidated: true,
+    });
   } catch (error: any) {
     console.error("Agent run error:", error);
-    res.status(500).json({
-      error: error.message || "Failed to execute agent reasoning",
-      fallbackPlan: generateLocalHeuristicPlan(req.body?.prompt || "", req.body?.tools || [], req.body?.contextState || {}),
+    const fallbackPlan = generateCatalogDrivenPlan(req.body?.prompt || "", req.body?.tools || [], req.body?.contextState || {});
+    const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan(fallbackPlan, req.body?.tools || []);
+
+    res.status(200).json({
+      thought: "Executed fallback catalog-driven planning engine.",
+      steps: validatedSteps,
+      validationErrors: [...validationErrors, error.message],
+      messageToUser: "Executing resilient WebMCP workflow.",
+      securityValidated: true,
     });
   }
 });
@@ -136,17 +234,17 @@ app.post("/api/agent/suggest", async (req, res) => {
     if (!ai) {
       return res.json({
         suggestions: [
-          "Find best audio gear & negotiate 15% discount",
-          "Customize titanium keyboard with laser engraving & stage checkout",
-          "Run carbon-neutral supply chain analysis on catalog",
-          "Compare high-speed SSD arrays across all warehouse hubs",
+          "Find mechanical keyboard under $300 & configure titanium finish",
+          "Compare top 3 peripherals by price, switches, and ergonomics",
+          "Stage 10-unit developer team bundle & negotiate bulk discount",
+          "Simulate zero-emission supply chain freight from nearest hub",
         ],
       });
     }
 
     const response = await ai.models.generateContent({
       model: "gemini-3.7-flash",
-      contents: `Given currentView=${currentView}, cartCount=${cartCount}, selectedProduct=${selectedProductId}, generate 4 short, highly compelling action prompts that a human user would ask their browser WebMCP agent to do on this commerce studio. Return a JSON array of 4 strings.`,
+      contents: `Given currentView=${currentView}, cartCount=${cartCount}, selectedProduct=${selectedProductId}, generate 4 realistic, actionable commerce/engineering prompts that a user or developer would ask an autonomous WebMCP browser agent to do on this hardware studio. Return a JSON array of 4 strings.`,
       config: {
         responseMimeType: "application/json",
       },
@@ -157,264 +255,251 @@ app.post("/api/agent/suggest", async (req, res) => {
   } catch {
     res.json({
       suggestions: [
-        "Find best audio gear & negotiate 15% discount",
-        "Customize titanium keyboard with laser engraving & stage checkout",
-        "Run carbon-neutral supply chain analysis on catalog",
-        "Compare high-speed SSD arrays across all warehouse hubs",
+        "Find mechanical keyboard under $300 & configure titanium finish",
+        "Compare top 3 peripherals by price, switches, and ergonomics",
+        "Stage 10-unit developer team bundle & negotiate bulk discount",
+        "Simulate zero-emission supply chain freight from nearest hub",
       ],
     });
   }
 });
 
-// Intelligent, prompt-aware local heuristic fallback planner (Bug 4 fix)
-function generateLocalHeuristicPlan(prompt: string, tools: any[], contextState: any) {
+// Dynamic, Catalog-Driven Planning Engine (Eliminates Hardcoded Product Assumptions)
+function generateCatalogDrivenPlan(prompt: string, tools: any[], contextState: any) {
   const p = (prompt || "").toLowerCase();
   const steps: any[] = [];
+  const catalog = (contextState?.products && contextState.products.length > 0)
+    ? contextState.products
+    : INITIAL_PRODUCTS;
 
-  // 1. Identify target product & category from prompt or context
-  let targetProductId = contextState?.selectedProduct?.id || "prod-keyboard-01";
-  let targetCategory: string | undefined = undefined;
-  let targetProductName = "Aura Hardware";
-
-  if (p.includes("audio") || p.includes("deck") || p.includes("sound") || p.includes("speaker") || p.includes("headphone") || p.includes("spatial")) {
-    targetProductId = "prod-audio-02";
-    targetCategory = "audio";
-    targetProductName = "Aura Spatial Pulse Audio Deck";
-  } else if (p.includes("ring") || p.includes("wearable") || p.includes("biosync") || p.includes("health") || p.includes("neural")) {
-    targetProductId = "prod-wear-03";
-    targetCategory = "wearables";
-    targetProductName = "Aura BioSync Neural Ring";
-  } else if (p.includes("server") || p.includes("blade") || p.includes("compute") || p.includes("workstation") || p.includes("gpu") || p.includes("obsidian")) {
-    targetProductId = "prod-comp-04";
-    targetCategory = "computing";
-    targetProductName = "Aura Obsidian Blade Server";
-  } else if (p.includes("controller") || p.includes("stream") || p.includes("studio") || p.includes("creator") || p.includes("quantum")) {
-    targetProductId = "prod-stud-05";
-    targetCategory = "studio";
-    targetProductName = "Aura Quantum Stream Controller";
-  } else if (p.includes("ssd") || p.includes("storage") || p.includes("nvme") || p.includes("array") || p.includes("drive") || p.includes("hyperdrive")) {
-    targetProductId = "prod-comp-06";
-    targetCategory = "computing";
-    targetProductName = "Aura HyperDrive Gen5 NVMe Array";
-  } else if (p.includes("keyboard") || p.includes("cyberclaw") || p.includes("switches") || p.includes("peripherals")) {
-    targetProductId = "prod-keyboard-01";
-    targetCategory = "peripherals";
-    targetProductName = "Aura CyberClaw Pro Keyboard";
+  // 1. Extract Price Constraints (e.g., "under $200", "max $500", "below 300")
+  let maxPrice: number | undefined = undefined;
+  const priceMatch = p.match(/(?:under|below|max|less than|\$)\s*(\d{2,5})/i);
+  if (priceMatch) {
+    maxPrice = parseInt(priceMatch[1], 10);
   }
 
-  // 2. Extract requested discount percentage if mentioned
-  const discountMatch = p.match(/(\d{1,2})%/);
-  const requestedDiscountPct = discountMatch ? parseInt(discountMatch[1], 10) : 15;
+  // 2. Extract Quantity (e.g., "5 units", "2 keyboards", "10x")
+  let targetQuantity = 1;
+  const qtyMatch = p.match(/\b(\d{1,3})\s*(?:x|units?|items?|keyboards?|headsets?|rings?|servers?|pcs?)?\b/i);
+  if (qtyMatch) {
+    const parsedQty = parseInt(qtyMatch[1], 10);
+    if (parsedQty > 0 && parsedQty <= 100) targetQuantity = parsedQty;
+  }
 
-  // 3. Extract quantity if specified
-  const qtyMatch = p.match(/\b(\d{1,2})\s*(x|units?|items?|pcs?)?\b/);
-  const targetQuantity = qtyMatch && parseInt(qtyMatch[1], 10) > 0 && parseInt(qtyMatch[1], 10) < 50 ? parseInt(qtyMatch[1], 10) : 1;
+  // 3. Dynamic Catalog Search & Relevance Scoring
+  const searchTokens = p
+    .replace(/[^\w\s]/gi, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 2 && !["the", "and", "for", "with", "under", "best", "find", "show", "buy", "get", "add", "all"].includes(t));
 
-  // 4. Extract customization attributes
-  const material = p.includes("walnut")
-    ? "Aerospace Walnut"
-    : p.includes("obsidian")
-    ? "Matte Obsidian"
-    : p.includes("copper")
-    ? "Forged Copper"
-    : "Brushed Titanium";
+  const scoredProducts = catalog.map((product: any) => {
+    let score = 0;
+    const nameLower = product.name.toLowerCase();
+    const descLower = product.description.toLowerCase();
+    const tagLower = (product.tagline || "").toLowerCase();
+    const catLower = product.category.toLowerCase();
 
-  const accentGlow = p.includes("emerald") || p.includes("green")
-    ? "Emerald"
-    : p.includes("amber") || p.includes("orange") || p.includes("gold")
-    ? "Solar Amber"
-    : p.includes("purple") || p.includes("violet")
-    ? "Ultraviolet"
-    : "Cyan Neon";
+    // Token matching
+    searchTokens.forEach((token: string) => {
+      if (nameLower.includes(token)) score += 10;
+      if (catLower.includes(token)) score += 8;
+      if (tagLower.includes(token)) score += 5;
+      if (descLower.includes(token)) score += 2;
+    });
 
-  // Extract engraving if in quotes or words
+    // Budget filtering penalty
+    if (maxPrice !== undefined && product.price > maxPrice) {
+      score -= 50;
+    }
+
+    // Rating boost
+    score += (product.rating || 4.5) * 2;
+
+    return { product, score };
+  });
+
+  scoredProducts.sort((a: any, b: any) => b.score - a.score);
+  const bestMatch = scoredProducts[0]?.product || catalog[0];
+  const matchedCategory = bestMatch.category;
+
+  // 4. Comparison Intent Check (e.g. "compare keyboards", "compare best 3")
+  const isCompareIntent = p.includes("compare") || p.includes("versus") || p.includes("vs") || p.includes("comparison");
+  if (isCompareIntent) {
+    const comparisonCandidates = scoredProducts.slice(0, 3).map((sp: any) => sp.product.id);
+    const candidateIds = comparisonCandidates.length >= 2 ? comparisonCandidates : [catalog[0].id, catalog[1].id, catalog[2].id];
+    steps.push({
+      tool: "compare_products",
+      args: {
+        productIds: candidateIds,
+        criteria: ["price", "rating", "carbonKg", "material", "connectivity"],
+      },
+      purpose: `Compare ${candidateIds.length} candidate hardware items across key specifications and value metrics`,
+    });
+    return steps;
+  }
+
+  // 5. Search / Discovery Step
+  const isSearchIntent =
+    p.includes("find") ||
+    p.includes("search") ||
+    p.includes("look") ||
+    p.includes("browse") ||
+    p.includes("show") ||
+    p.includes("best") ||
+    p.includes("under") ||
+    p.includes("budget");
+
+  if (isSearchIntent || steps.length === 0) {
+    const queryTerm = searchTokens.slice(0, 2).join(" ") || matchedCategory;
+    steps.push({
+      tool: "search_catalog",
+      args: {
+        query: queryTerm,
+        category: matchedCategory,
+        maxPrice,
+        sortBy: p.includes("rating") ? "rating" : p.includes("price") || p.includes("cheap") ? "price_asc" : undefined,
+      },
+      purpose: `Search catalog for ${matchedCategory} matching '${queryTerm}' within budget constraints`,
+    });
+  }
+
+  // 6. Inspect Product Details Step
+  const isInspectIntent = p.includes("inspect") || p.includes("specs") || p.includes("details") || p.includes("stock") || p.includes("battery");
+  if (isInspectIntent || (isSearchIntent && !p.includes("only search"))) {
+    steps.push({
+      tool: "inspect_product_details",
+      args: { productId: bestMatch.id },
+      purpose: `Inspect engineering specifications, warehouse availability, and materials for ${bestMatch.name}`,
+    });
+  }
+
+  // 7. Customization Intent
+  const isCustomizeIntent =
+    p.includes("customize") ||
+    p.includes("engrav") ||
+    p.includes("titanium") ||
+    p.includes("obsidian") ||
+    p.includes("walnut") ||
+    p.includes("frost") ||
+    p.includes("glow") ||
+    p.includes("emerald") ||
+    p.includes("neon") ||
+    p.includes("firmware") ||
+    p.includes("profile");
+
+  let material = "Brushed Titanium";
+  if (p.includes("walnut") || p.includes("wood")) material = "Aerospace Walnut";
+  else if (p.includes("obsidian") || p.includes("black")) material = "Matte Obsidian";
+  else if (p.includes("frost") || p.includes("emerald") || p.includes("green")) material = "Emerald Frost";
+
+  let accentGlow = "Cyan Neon";
+  if (p.includes("amber") || p.includes("gold") || p.includes("solar")) accentGlow = "Solar Amber";
+  else if (p.includes("emerald") || p.includes("green")) accentGlow = "Emerald";
+  else if (p.includes("violet") || p.includes("purple")) accentGlow = "Vapor Violet";
+
   let engravingText = "CYBER-2026 // WEBMCP";
   const quoteMatch = prompt.match(/["']([^"']{1,24})["']/);
   if (quoteMatch) {
     engravingText = quoteMatch[1];
-  } else if (p.includes("hackathon")) {
-    engravingText = "WEBMCP // 2026 WIN";
+  } else if (p.includes("developer") || p.includes("code")) {
+    engravingText = "DEV-SPEED // RUNTIME";
   }
 
   const firmwareProfile = p.includes("gaming")
-    ? "Ultra-Low Latency Gaming"
-    : p.includes("developer") || p.includes("code") || p.includes("macro")
+    ? "0.1mm Rapid Trigger Gaming"
+    : p.includes("dev") || p.includes("macro") || p.includes("code")
     ? "Developer Fast-Macro Profile"
-    : p.includes("audio") || p.includes("studio")
-    ? "Studio Audio Stream Profile"
+    : p.includes("silent") || p.includes("office")
+    ? "Acoustic Dampened Workspace"
     : "Standard Balanced";
-
-  // 5. Search / Catalog query
-  const isSearchIntent =
-    p.includes("search") ||
-    p.includes("find") ||
-    p.includes("show") ||
-    p.includes("browse") ||
-    p.includes("list") ||
-    p.includes("look for") ||
-    p.includes("filter");
-
-  if (isSearchIntent) {
-    // Extract actual query terms
-    const cleanQuery = prompt.replace(/(search|find|show|browse|list|look for|filter|for|me|the|a)/gi, "").trim();
-    steps.push({
-      tool: "search_catalog",
-      args: {
-        query: cleanQuery || (targetCategory ? "" : "pro"),
-        category: targetCategory,
-        maxPrice: p.includes("under") || p.includes("max") ? 800 : undefined,
-      },
-      purpose: `Search catalog for matching ${targetCategory || "hardware"} items`,
-    });
-  }
-
-  // 6. Inspect product details intent
-  const isInspectIntent = p.includes("inspect") || p.includes("specs") || p.includes("details") || p.includes("stock");
-  if (isInspectIntent) {
-    steps.push({
-      tool: "inspect_product_details",
-      args: { productId: targetProductId },
-      purpose: `Inspect engineering specifications and warehouse stock for ${targetProductName}`,
-    });
-  }
-
-  // 7. Customization intent
-  const isCustomizeIntent =
-    p.includes("customize") ||
-    p.includes("engrav") ||
-    p.includes("walnut") ||
-    p.includes("titanium") ||
-    p.includes("obsidian") ||
-    p.includes("glow") ||
-    p.includes("emerald") ||
-    p.includes("neon") ||
-    p.includes("color") ||
-    p.includes("firmware");
 
   if (isCustomizeIntent) {
     steps.push({
       tool: "customize_product_spec",
       args: {
-        productId: targetProductId,
+        productId: bestMatch.id,
         material,
         engravingText,
         accentGlow,
         firmwareProfile,
         engravingFont: "JetBrains Mono",
       },
-      purpose: `Apply generative customization (${material}, ${accentGlow}, engraving: '${engravingText}') in Studio`,
+      purpose: `Apply custom generative spec (${material}, ${accentGlow}, engraving: '${engravingText}') to ${bestMatch.name}`,
     });
   }
 
-  // 8. Add to cart / Stage bundle intent (Bug 4 fix: actively supports add_to_cart)
+  // 8. Add to Cart / Bundle Intent
   const isCartIntent =
-    p.includes("add to cart") ||
     p.includes("add") ||
     p.includes("cart") ||
-    p.includes("stage") ||
     p.includes("bundle") ||
+    p.includes("stage") ||
     p.includes("buy") ||
-    p.includes("order") ||
     p.includes("purchase");
 
   if (isCartIntent) {
-    if (p.includes("bundle") || (targetQuantity > 1 && p.includes("audio"))) {
+    if (p.includes("bundle") || (targetQuantity > 1 && catalog.length > 1)) {
+      const secondProduct = catalog.find((prod: any) => prod.id !== bestMatch.id) || catalog[1];
       steps.push({
         tool: "stage_procurement_bundle",
         args: {
           items: [
-            { productId: targetProductId, quantity: targetQuantity },
-            { productId: "prod-audio-02", quantity: 1 },
+            { productId: bestMatch.id, quantity: targetQuantity },
+            { productId: secondProduct.id, quantity: 1 },
           ],
           shippingTier: "priority_orbital",
         },
-        purpose: `Stage multi-item procurement bundle with ${targetProductName} into cart`,
+        purpose: `Stage multi-item hardware bundle with ${bestMatch.name} and ${secondProduct.name}`,
       });
     } else {
       steps.push({
         tool: "add_to_cart",
         args: {
-          productId: targetProductId,
+          productId: bestMatch.id,
           quantity: targetQuantity,
           customConfig: isCustomizeIntent
-            ? {
-                material,
-                engravingText,
-                accentGlow,
-                firmwareProfile,
-                engravingFont: "JetBrains Mono",
-              }
+            ? { material, engravingText, accentGlow, firmwareProfile, engravingFont: "JetBrains Mono" }
             : undefined,
         },
-        purpose: `Add ${targetQuantity}x ${targetProductName} to active shopping cart`,
+        purpose: `Add ${targetQuantity}x ${bestMatch.name} to shopping cart`,
       });
     }
   }
 
-  // 9. Negotiate discount intent
+  // 9. Dynamic Policy Negotiation Intent
   const isNegotiateIntent =
     p.includes("negotiate") ||
     p.includes("discount") ||
-    p.includes("deal") ||
-    p.includes("offer") ||
-    p.includes("coupon") ||
-    p.includes("promo") ||
+    p.includes("bulk") ||
     p.includes("b2b") ||
-    p.includes("bulk");
+    p.includes("deal") ||
+    p.includes("promo");
 
   if (isNegotiateIntent) {
+    const discountMatch = p.match(/(\d{1,2})%/);
+    const requestedDiscountPct = discountMatch ? parseInt(discountMatch[1], 10) : (targetQuantity >= 5 ? 15 : 10);
+
     steps.push({
       tool: "negotiate_price_discount",
       args: {
-        requestedDiscountPct: requestedDiscountPct,
-        reasoning: p.includes("hackathon")
-          ? "WebMCP Hackathon Challenge Partner Procurement Agreement"
-          : "B2B Volume Procurement and Enterprise Synergy Discount",
+        requestedDiscountPct,
+        reasoning: targetQuantity >= 5
+          ? `B2B Enterprise Volume Procurement (${targetQuantity} units)`
+          : `Developer Partner Program & Promotional Evaluation Agreement`,
       },
-      purpose: `Initiate algorithmic B2B negotiation for ${requestedDiscountPct}% discount`,
+      purpose: `Execute algorithmic policy negotiation for ${requestedDiscountPct}% volume discount`,
     });
   }
 
-  // 10. Checkout & Human confirmation intent (Ensures HITL gate is paired with checkout)
-  const isCheckoutIntent =
-    p.includes("checkout") ||
-    p.includes("order") ||
-    p.includes("pay") ||
-    p.includes("finish") ||
-    p.includes("finalize");
-
-  if (isCheckoutIntent) {
-    // Human in the loop confirmation step
-    steps.push({
-      tool: "request_human_confirmation",
-      args: {
-        action: "checkout_signoff",
-        title: "Approve Hardware Order Placement",
-        details: `Authorize payment for staged cart with negotiated ${requestedDiscountPct}% discount.`,
-      },
-      purpose: "Execute Human-in-the-Loop authorization protocol before financial escrow",
-    });
-
-    // Execute checkout step (which is cryptographically verified by the context gate)
-    steps.push({
-      tool: "execute_smart_checkout",
-      args: {
-        customerNotes: "WebMCP verified autonomous dispatch order",
-        paymentMethod: "instant_escrow",
-      },
-      purpose: "Finalize payment and lock escrow authorization",
-    });
-  }
-
-  // 11. Logistics & Carbon calculation intent
+  // 10. Logistics & Carbon Simulation
   const isLogisticsIntent =
     p.includes("carbon") ||
     p.includes("logistics") ||
     p.includes("supply") ||
-    p.includes("dispatch") ||
     p.includes("route") ||
     p.includes("freight") ||
-    p.includes("ship");
+    p.includes("dispatch");
 
   if (isLogisticsIntent) {
     steps.push({
@@ -423,21 +508,48 @@ function generateLocalHeuristicPlan(prompt: string, tools: any[], contextState: 
         destinationZip: "94107",
         warehousePriority: p.includes("carbon") ? "lowest_carbon" : "fastest_speed",
       },
-      purpose: "Simulate multi-hub warehouse routing with zero-emission freight",
+      purpose: "Calculate optimal multi-hub warehouse dispatch prioritizing zero-emission transport",
     });
   }
 
-  // Fallback if no specific trigger matched: exploratory search + metrics
-  if (steps.length === 0) {
+  // 11. Theme Switcher Intent
+  const isThemeIntent = p.includes("theme") || p.includes("light") || p.includes("dark") || p.includes("neon") || p.includes("contrast");
+  if (isThemeIntent) {
+    const themeId = p.includes("light") || p.includes("day")
+      ? "clean_light"
+      : p.includes("neon") || p.includes("cyber") || p.includes("matrix")
+      ? "cyber_neon"
+      : p.includes("amber") || p.includes("warm")
+      ? "warm_editorial"
+      : "dark_obsidian";
+
     steps.push({
-      tool: "search_catalog",
-      args: { query: p.length > 0 ? p.split(" ")[0] : "pro" },
-      purpose: "Search catalog for hardware matching query",
+      tool: "set_app_theme",
+      args: { themeId },
+      purpose: `Switch application design atmosphere to ${themeId}`,
     });
+  }
+
+  // 12. Checkout & HITL Escrow Intent
+  const isCheckoutIntent = p.includes("checkout") || p.includes("pay") || p.includes("finalize order") || p.includes("finish");
+  if (isCheckoutIntent) {
     steps.push({
-      tool: "query_live_metrics",
-      args: { metricType: "catalog_overview" },
-      purpose: "Query live system state and telemetry",
+      tool: "request_human_confirmation",
+      args: {
+        action: "checkout_signoff",
+        title: "Authorize Hardware Procurement Order",
+        details: `Authorize payment and escrow dispatch for staged cart items with verified discounts.`,
+      },
+      purpose: "Request explicit Human-in-the-Loop authorization before financial escrow locking",
+    });
+
+    steps.push({
+      tool: "execute_smart_checkout",
+      args: {
+        customerNotes: "WebMCP verified autonomous dispatch order",
+        paymentMethod: "instant_escrow",
+      },
+      purpose: "Lock escrow authorization and finalize order with cryptographic receipt",
     });
   }
 

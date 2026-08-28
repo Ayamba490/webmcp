@@ -145,3 +145,64 @@ export interface LogisticsDispatch {
   carbonOffsetTons: number;
   status: "staged" | "dispatched" | "in_transit";
 }
+
+export type SecurityTier = "GREEN_AUTO" | "YELLOW_GUARDRAILED" | "RED_HITL_REQUIRED";
+
+export interface SecurityPermissionInfo {
+  tier: SecurityTier;
+  label: string;
+  color: string;
+  description: string;
+  requiresHumanApproval: boolean;
+}
+
+export interface ProductComparison {
+  products: Product[];
+  criteria: string[];
+  recommendation: {
+    winnerId: string;
+    winnerName: string;
+    rationale: string;
+    rankings: { productId: string; rank: number; medal: string; highlight: string }[];
+  };
+}
+
+export interface BenchmarkTask {
+  id: string;
+  title: string;
+  category: "search_discovery" | "customization" | "procurement_negotiation" | "logistics_carbon" | "security_hitl";
+  prompt: string;
+  expectedTools: string[];
+  securityTier: SecurityTier;
+  status: "idle" | "running" | "passed" | "failed";
+  durationMs?: number;
+  actualTools?: string[];
+  validationErrors?: string[];
+  outputSnippet?: string;
+}
+
+export interface BenchmarkSummary {
+  totalTasks: number;
+  passedTasks: number;
+  failedTasks: number;
+  successRatePct: number;
+  toolSelectionAccuracyPct: number;
+  schemaValidationErrors: number;
+  hitlBypassesBlocked: number;
+  avgDurationMs: number;
+  totalDurationMs: number;
+}
+
+export interface NegotiationPolicyReport {
+  cartTotal: number;
+  itemCount: number;
+  bulkTier: "Standard" | "Small Batch (3+)" | "Enterprise Volume (10+)";
+  eligibleDiscountMaxPct: number;
+  requestedDiscountPct: number;
+  approvedDiscountPct: number;
+  marginSafetyFloorPct: number;
+  isWithinPolicy: boolean;
+  policyRationale: string;
+}
+
+export type AppView = "store" | "studio" | "agent_hud" | "inspector" | "benchmark" | "compare" | "why_webmcp";

@@ -82,25 +82,35 @@ export const Storefront: React.FC = () => {
               <div className="text-[9px] uppercase tracking-[0.25em] text-white/40 font-bold mb-1">
                 REGISTERED TOOLS
               </div>
-              <div className="text-3xl sm:text-4xl font-black text-white">12 SPEC</div>
+              <div className="text-3xl sm:text-4xl font-black text-white">13 TOOLS</div>
             </div>
             <div className="p-4 bg-white/[0.02] border border-white/5">
               <div className="text-[9px] uppercase tracking-[0.25em] text-white/40 font-bold mb-1">
-                GLOBAL LOGISTICS
+                BENCHMARK SUITE
               </div>
-              <div className="text-3xl sm:text-4xl font-black text-[#6366F1]">SF / LON / TYO</div>
+              <button
+                onClick={() => setCurrentView("benchmark")}
+                className="text-left text-3xl sm:text-4xl font-black text-[#6366F1] hover:underline cursor-pointer"
+              >
+                15 VECTORS
+              </button>
             </div>
             <div className="p-4 bg-white/[0.02] border border-white/5">
               <div className="text-[9px] uppercase tracking-[0.25em] text-white/40 font-bold mb-1">
-                DISCOUNT ENGINE
+                DISCOUNT POLICY
               </div>
-              <div className="text-3xl sm:text-4xl font-black text-[#00FF00]">UP TO -25%</div>
+              <div className="text-3xl sm:text-4xl font-black text-[#00FF00]">UP TO -28%</div>
             </div>
             <div className="p-4 bg-white/[0.02] border border-white/5">
               <div className="text-[9px] uppercase tracking-[0.25em] text-white/40 font-bold mb-1">
-                CUSTOM MANUFACTURING
+                SPEC COMPARISON
               </div>
-              <div className="text-3xl sm:text-4xl font-black text-white">3D LASER</div>
+              <button
+                onClick={() => setCurrentView("compare")}
+                className="text-left text-3xl sm:text-4xl font-black text-white hover:text-[#6366F1] transition-colors cursor-pointer"
+              >
+                MATRIX →
+              </button>
             </div>
           </div>
         </div>

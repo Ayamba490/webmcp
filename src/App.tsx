@@ -3,6 +3,9 @@ import { AppProvider, useApp } from "./context/AppContext";
 import { Header } from "./components/Header";
 import { Storefront } from "./components/Storefront";
 import { CustomizerStudio } from "./components/CustomizerStudio";
+import { ProductComparisonView } from "./components/ProductComparisonView";
+import { BenchmarkDashboard } from "./components/BenchmarkDashboard";
+import { WhyWebMCP } from "./components/WhyWebMCP";
 import { AgentHud } from "./components/AgentHud";
 import { WebMCPInspector } from "./components/WebMCPInspector";
 import { CartDrawer } from "./components/CartDrawer";
@@ -34,6 +37,9 @@ function MainLayout() {
       <main className="flex-1 mx-auto max-w-7xl px-4 sm:px-8 py-8 w-full">
         {currentView === "store" && <Storefront />}
         {currentView === "studio" && <CustomizerStudio />}
+        {currentView === "compare" && <ProductComparisonView />}
+        {currentView === "benchmark" && <BenchmarkDashboard />}
+        {currentView === "why_webmcp" && <WhyWebMCP />}
         {currentView === "agent_hud" && <AgentHud />}
         {currentView === "inspector" && <WebMCPInspector />}
       </main>

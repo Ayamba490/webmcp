@@ -25,6 +25,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ isOpen, onClose }) => {
     activeDiscountPct,
     cartTotal,
     negotiation,
+    negotiationReport,
     startNegotiation,
     invokeToolDirectly,
   } = useApp();
@@ -260,6 +261,24 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ isOpen, onClose }) => {
                           ? negotiation.history[negotiation.history.length - 1].reason
                           : "Propose a bulk or team discount. WebMCP tool 'negotiate_price_discount' evaluates terms dynamically."}
                       </p>
+
+                      {negotiationReport && (
+                        <div className="mt-3 p-3 bg-black/40 border border-white/10 text-[10px] font-mono space-y-1 text-white/70">
+                          <div className="flex justify-between text-white font-bold">
+                            <span>POLICY TIER:</span>
+                            <span className="text-[#6366F1]">{negotiationReport.bulkTier}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>MAX ELIGIBLE DISCOUNT:</span>
+                            <span className="text-[#00FF00] font-bold">{negotiationReport.eligibleDiscountMaxPct}%</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>MARGIN SAFETY FLOOR:</span>
+                            <span>{negotiationReport.marginSafetyFloorPct}%</span>
+                          </div>
+                        </div>
+                      )}
+
                       <button
                         onClick={() => setIsNegotiating(true)}
                         className="mt-3 text-xs font-mono font-bold text-white hover:underline flex items-center gap-1 uppercase tracking-wider"
