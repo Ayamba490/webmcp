@@ -70,7 +70,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
           <div className="hidden xl:flex items-center gap-2 rounded-full border border-current/15 bg-current/[0.03] px-3.5 py-1 text-xs">
             <span className="w-2 h-2 rounded-full bg-[#00FF00] shadow-[0_0_8px_#00FF00]"></span>
             <span className="font-mono text-[11px] opacity-80 font-bold">document.modelContext</span>
-            <span className="text-[#00FF00] font-mono text-[10px] font-bold">● ACTIVE (13)</span>
+            <span className="text-[#00FF00] font-mono text-[10px] font-bold">● ACTIVE (14 TOOLS)</span>
           </div>
         </div>
 

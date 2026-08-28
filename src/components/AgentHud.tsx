@@ -10,11 +10,17 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  Activity,
+  MessageSquare,
+  Shield,
+  Layers,
 } from "lucide-react";
+import { AgentActivityTrace } from "./AgentActivityTrace";
 
 export const AgentHud: React.FC = () => {
-  const { chatMessages, sendAgentMessage, isAgentRunning } = useApp();
+  const { chatMessages, sendAgentMessage, isAgentRunning, toolLogs } = useApp();
   const [inputQuery, setInputQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<"chat" | "trace">("chat");
   const [expandedToolIndex, setExpandedToolIndex] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -37,8 +43,8 @@ export const AgentHud: React.FC = () => {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pb-16">
-      {/* Left Column: Chat Conversation Stream */}
-      <div className="lg:col-span-8 flex flex-col h-[720px] border border-white/10 bg-[#0d0d0d] shadow-2xl">
+      {/* Left Column: Chat Conversation Stream & Activity Trace */}
+      <div className="lg:col-span-8 flex flex-col h-[760px] border border-white/10 bg-[#0d0d0d] shadow-2xl">
         {/* HUD Top Bar */}
         <div className="flex items-center justify-between border-b border-white/10 bg-black/60 px-6 py-4">
           <div className="flex items-center gap-3">
@@ -53,138 +59,164 @@ export const AgentHud: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-[#00FF00] shadow-[0_0_8px_#00FF00]" />
               </div>
               <span className="text-[10px] font-mono text-white/50 uppercase tracking-widest block mt-0.5">
-                DOCUMENT.MODELCONTEXT // 12 REGISTERED TOOLS
+                DOCUMENT.MODELCONTEXT // 14 REGISTERED TOOLS (11 COMMERCE + 3 OBSERVABILITY)
               </span>
             </div>
           </div>
 
-          <div className="hidden sm:flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-white/40">
-            <span className="border border-white/10 bg-black px-2.5 py-1 text-[#6366F1] font-bold">
-              MODEL: GEMINI 3.7 FLASH
-            </span>
+          {/* View Mode Toggle */}
+          <div className="flex items-center gap-1 bg-black border border-white/10 p-1 font-mono text-[10px]">
+            <button
+              onClick={() => setActiveTab("chat")}
+              className={`flex items-center gap-1.5 px-3 py-1 uppercase tracking-wider transition-colors ${
+                activeTab === "chat"
+                  ? "bg-white text-black font-bold"
+                  : "text-white/60 hover:text-white"
+              }`}
+            >
+              <MessageSquare className="h-3 w-3" />
+              <span>COPILOT HUD</span>
+            </button>
+            <button
+              onClick={() => setActiveTab("trace")}
+              className={`flex items-center gap-1.5 px-3 py-1 uppercase tracking-wider transition-colors ${
+                activeTab === "trace"
+                  ? "bg-[#6366F1] text-white font-bold"
+                  : "text-white/60 hover:text-white"
+              }`}
+            >
+              <Activity className="h-3 w-3" />
+              <span>LIVE TRACE ({toolLogs.length})</span>
+            </button>
           </div>
         </div>
 
-        {/* Message List */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
-          {chatMessages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex gap-3 text-xs sm:text-sm ${
-                msg.sender === "human" ? "justify-end" : "justify-start"
-              }`}
-            >
-              {msg.sender !== "human" && (
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center bg-white/5 border border-white/10 text-white">
-                  {msg.sender === "agent" ? <Bot className="h-4 w-4 text-[#6366F1]" /> : <Terminal className="h-4 w-4 text-[#00FF00]" />}
-                </div>
-              )}
-
+        {/* Tab Content */}
+        {activeTab === "trace" ? (
+          <div className="flex-1 overflow-y-auto">
+            <AgentActivityTrace maxItems={25} />
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-6 space-y-5">
+            {chatMessages.map((msg) => (
               <div
-                className={`max-w-[85%] space-y-3 p-5 leading-relaxed ${
-                  msg.sender === "human"
-                    ? "bg-white text-black font-semibold ml-auto border border-white"
-                    : msg.sender === "system"
-                    ? "bg-black text-[#00FF00] font-mono text-xs border border-white/20"
-                    : "bg-black border border-white/10 text-white/90"
+                key={msg.id}
+                className={`flex gap-3 text-xs sm:text-sm ${
+                  msg.sender === "human" ? "justify-end" : "justify-start"
                 }`}
               >
-                {/* Agent Thought header if present */}
-                {msg.thought && (
-                  <div className="border border-white/10 bg-white/[0.02] p-3 text-[10px] text-white/60 font-mono">
-                    <span className="text-[#6366F1] font-bold uppercase tracking-widest block mb-1">
-                      🧠 AGENT REASONING SCRATCHPAD:
-                    </span>
-                    {msg.thought}
+                {msg.sender !== "human" && (
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center bg-white/5 border border-white/10 text-white">
+                    {msg.sender === "agent" ? <Bot className="h-4 w-4 text-[#6366F1]" /> : <Terminal className="h-4 w-4 text-[#00FF00]" />}
                   </div>
                 )}
 
-                <p className="whitespace-pre-wrap">{msg.text}</p>
+                <div
+                  className={`max-w-[85%] space-y-3 p-5 leading-relaxed ${
+                    msg.sender === "human"
+                      ? "bg-white text-black font-semibold ml-auto border border-white"
+                      : msg.sender === "system"
+                      ? "bg-black text-[#00FF00] font-mono text-xs border border-white/20"
+                      : "bg-black border border-white/10 text-white/90"
+                  }`}
+                >
+                  {/* Agent Thought / Intent header */}
+                  {msg.thought && (
+                    <div className="border border-white/10 bg-white/[0.02] p-3 text-[10px] text-white/60 font-mono">
+                      <span className="text-[#6366F1] font-bold uppercase tracking-widest block mb-1">
+                        🧠 INTENT SYNTHESIS & REASONING:
+                      </span>
+                      {msg.thought}
+                    </div>
+                  )}
 
-                {/* Tool calls execution accordion */}
-                {msg.toolCalls && msg.toolCalls.length > 0 && (
-                  <div className="space-y-2 pt-3 border-t border-white/10">
-                    <span className="text-[9px] font-mono font-bold text-white/40 uppercase tracking-[0.2em] block">
-                      ⚡ WEBMCP TOOL INVOCATIONS ({msg.toolCalls.length})
-                    </span>
+                  <p className="whitespace-pre-wrap">{msg.text}</p>
 
-                    {msg.toolCalls.map((tc, idx) => {
-                      const toolKey = `${msg.id}-tool-${idx}`;
-                      const isExpanded = expandedToolIndex === toolKey;
+                  {/* Tool calls execution accordion */}
+                  {msg.toolCalls && msg.toolCalls.length > 0 && (
+                    <div className="space-y-2 pt-3 border-t border-white/10">
+                      <span className="text-[9px] font-mono font-bold text-white/40 uppercase tracking-[0.2em] block">
+                        ⚡ WEBMCP TOOL INVOCATIONS ({msg.toolCalls.length})
+                      </span>
 
-                      return (
-                        <div
-                          key={toolKey}
-                          className="border border-white/10 bg-white/[0.02] font-mono text-[10px]"
-                        >
-                          <button
-                            onClick={() => setExpandedToolIndex(isExpanded ? null : toolKey)}
-                            className="w-full flex items-center justify-between p-3 text-left hover:bg-white/5 transition-colors"
+                      {msg.toolCalls.map((tc, idx) => {
+                        const toolKey = `${msg.id}-tool-${idx}`;
+                        const isExpanded = expandedToolIndex === toolKey;
+
+                        return (
+                          <div
+                            key={toolKey}
+                            className="border border-white/10 bg-white/[0.02] font-mono text-[10px]"
                           >
-                            <div className="flex items-center gap-2">
-                              {tc.status === "running" && <span className="animate-spin text-white">⏳</span>}
-                              {tc.status === "done" && <CheckCircle2 className="h-3.5 w-3.5 text-[#00FF00]" />}
-                              {tc.status === "failed" && <AlertCircle className="h-3.5 w-3.5 text-rose-500" />}
-                              <span className="font-bold text-white uppercase">
-                                document.modelContext.{tc.tool}()
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 text-white/50">
-                              <span className="text-[9px] uppercase tracking-wider hidden sm:inline">{tc.purpose}</span>
-                              {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                            </div>
-                          </button>
-
-                          {isExpanded && (
-                            <div className="p-4 border-t border-white/10 bg-black space-y-3">
-                              <div>
-                                <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest block mb-1">
-                                  INPUT ARGUMENTS (JSON SCHEMA):
+                            <button
+                              onClick={() => setExpandedToolIndex(isExpanded ? null : toolKey)}
+                              className="w-full flex items-center justify-between p-3 text-left hover:bg-white/5 transition-colors"
+                            >
+                              <div className="flex items-center gap-2">
+                                {tc.status === "running" && <span className="animate-spin text-white">⏳</span>}
+                                {tc.status === "done" && <CheckCircle2 className="h-3.5 w-3.5 text-[#00FF00]" />}
+                                {tc.status === "failed" && <AlertCircle className="h-3.5 w-3.5 text-rose-500" />}
+                                <span className="font-bold text-white uppercase">
+                                  document.modelContext.{tc.tool}()
                                 </span>
-                                <pre className="p-3 bg-white/[0.02] border border-white/5 text-[#6366F1] text-[10px] overflow-x-auto">
-                                  {JSON.stringify(tc.args, null, 2)}
-                                </pre>
                               </div>
-                              {tc.result && (
+                              <div className="flex items-center gap-2 text-white/50">
+                                <span className="text-[9px] uppercase tracking-wider hidden sm:inline">{tc.purpose}</span>
+                                {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                              </div>
+                            </button>
+
+                            {isExpanded && (
+                              <div className="p-4 border-t border-white/10 bg-black space-y-3">
                                 <div>
                                   <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest block mb-1">
-                                    EXECUTION RESULT:
+                                    INPUT ARGUMENTS (STRICT SCHEMA VALIDATED):
                                   </span>
-                                  <pre className="p-3 bg-white/[0.02] border border-white/5 text-[#00FF00] text-[10px] overflow-x-auto">
-                                    {JSON.stringify(tc.result, null, 2)}
+                                  <pre className="p-3 bg-white/[0.02] border border-white/5 text-[#6366F1] text-[10px] overflow-x-auto">
+                                    {JSON.stringify(tc.args, null, 2)}
                                   </pre>
                                 </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                                {tc.result && (
+                                  <div>
+                                    <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest block mb-1">
+                                      TOOL EXECUTION RESULT:
+                                    </span>
+                                    <pre className="p-3 bg-white/[0.02] border border-white/5 text-[#00FF00] text-[10px] overflow-x-auto">
+                                      {JSON.stringify(tc.result, null, 2)}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <span className="block text-[9px] text-white/40 text-right font-mono mt-1 uppercase tracking-wider">
+                    {msg.timestamp}
+                  </span>
+                </div>
+
+                {msg.sender === "human" && (
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center bg-white text-black font-bold">
+                    <User className="h-4 w-4" />
                   </div>
                 )}
-
-                <span className="block text-[9px] text-white/40 text-right font-mono mt-1 uppercase tracking-wider">
-                  {msg.timestamp}
-                </span>
               </div>
+            ))}
 
-              {msg.sender === "human" && (
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center bg-white text-black font-bold">
-                  <User className="h-4 w-4" />
-                </div>
-              )}
-            </div>
-          ))}
+            {isAgentRunning && (
+              <div className="flex gap-2 items-center text-xs font-mono text-[#00FF00] p-4 bg-black border border-white/10">
+                <span className="animate-spin">⚙️</span>
+                <span className="uppercase tracking-wider">EXECUTING DOCUMENT.MODELCONTEXT OBSERVE-AND-ACT LOOP...</span>
+              </div>
+            )}
 
-          {isAgentRunning && (
-            <div className="flex gap-2 items-center text-xs font-mono text-[#00FF00] p-4 bg-black border border-white/10">
-              <span className="animate-spin">⚙️</span>
-              <span className="uppercase tracking-wider">EVALUATING DOCUMENT.MODELCONTEXT SPEC TOOLS...</span>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
+            <div ref={messagesEndRef} />
+          </div>
+        )}
 
         {/* Input Bar */}
         <form
@@ -193,7 +225,7 @@ export const AgentHud: React.FC = () => {
         >
           <input
             type="text"
-            placeholder="INSTRUCT YOUR AGENT (E.G. 'FIND KEYBOARDS, NEGOTIATE 15% OFF, AND STAGE CHECKOUT')..."
+            placeholder="INSTRUCT YOUR AGENT (E.G. 'FIND KEYBOARDS UNDER $200, COMPARE THEM, AND NEGOTIATE 15% OFF')..."
             value={inputQuery}
             onChange={(e) => setInputQuery(e.target.value)}
             disabled={isAgentRunning}
@@ -226,25 +258,31 @@ export const AgentHud: React.FC = () => {
           <div className="space-y-3">
             {[
               {
-                title: "1. SOURCING & B2B NEGOTIATION",
+                title: "1. HARDWARE DISCOVERY & SPEC COMPARISON",
+                desc: "Search keyboards under $200, inspect specs, and render side-by-side comparison matrix.",
+                prompt: "Find the best three keyboards under $200, inspect their specs, and compare them side by side.",
+                badge: "COMPARE MATRIX",
+              },
+              {
+                title: "2. SOURCING & B2B NEGOTIATION",
                 desc: "Search audio & peripherals, negotiate 15% discount, stage checkout.",
                 prompt: "Search the catalog for audio and keyboard hardware, negotiate a 15% discount, stage the bundle into my cart, and ask for my signoff.",
                 badge: "HIGH IMPACT",
               },
               {
-                title: "2. HARDWARE CUSTOMIZER",
+                title: "3. HARDWARE CUSTOMIZER",
                 desc: "Apply Aerospace Walnut finish, laser engraving 'CYBER-2026', and Emerald glow.",
                 prompt: "Customize the mechanical keyboard with Aerospace Walnut material, laser engrave 'CYBER-2026 // WEBMCP' in JetBrains Mono font, and set Emerald accent glow.",
                 badge: "STUDIO",
               },
               {
-                title: "3. GREEN SUPPLY CHAIN LOGISTICS",
+                title: "4. GREEN SUPPLY CHAIN LOGISTICS",
                 desc: "Simulate lowest-carbon dispatch to 94107 with warehouse stock telemetry.",
                 prompt: "Simulate supply chain dispatch for destination zip 94107 with lowest_carbon priority and query store sustainability metrics.",
                 badge: "ESG CARBON",
               },
               {
-                title: "4. QUANTUM SERVER INSPECTION",
+                title: "5. QUANTUM SERVER INSPECTION",
                 desc: "Inspect 32TB Quantum-Edge server node and trigger spotlight highlight.",
                 prompt: "Inspect details for product prod-server-04, spotlight the element on screen, and output warehouse stock breakdown.",
                 badge: "UI SPOTLIGHT",
@@ -285,8 +323,12 @@ export const AgentHud: React.FC = () => {
               <span className="text-white font-bold">window.document.modelContext</span>
             </div>
             <div className="flex justify-between py-1.5 border-b border-white/5">
-              <span className="text-white/40 uppercase">SCHEMA VALIDATION:</span>
+              <span className="text-white/40 uppercase">SCHEMA VALIDATOR:</span>
               <span className="text-[#6366F1] font-bold">JSON SCHEMA DRAFT-07</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-b border-white/5">
+              <span className="text-white/40 uppercase">TOOL BREAKDOWN:</span>
+              <span className="text-white font-bold">11 COMMERCE + 3 OBSERVABILITY</span>
             </div>
             <div className="flex justify-between py-1.5 border-b border-white/5">
               <span className="text-white/40 uppercase">HUMAN SIGNOFF:</span>

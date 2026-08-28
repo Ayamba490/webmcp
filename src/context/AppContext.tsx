@@ -925,7 +925,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [addToCart, clearCart, startNegotiation]);
 
-  // Send message to agent
+  // Send message to agent with observe-and-adapt execution loop
   const sendAgentMessage = async (userText: string) => {
     if (!userText.trim()) return;
 
@@ -952,6 +952,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         cartTotal,
         selectedProduct: selectedProduct ? { id: selectedProduct.id, name: selectedProduct.name, price: selectedProduct.price } : null,
         activeDiscountPct,
+        products: stateRef.current.products,
       };
 
       const response = await fetch("/api/agent/run", {
@@ -968,7 +969,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const plan = data.plan || data.steps || [];
       const toolCallsList: NonNullable<AgentChatMessage["toolCalls"]> = [];
 
-      // Execute each step in the WebMCP tool sequence
+      // Initialize tool steps
       for (const step of plan) {
         toolCallsList.push({
           tool: step.tool,
@@ -984,35 +985,71 @@ export function AppProvider({ children }: { children: ReactNode }) {
         {
           id: agentMsgId,
           sender: "agent",
-          text: data.messageToUser || (data.thought ? `Executing plan: ${data.thought}` : "Executing requested actions..."),
+          text: data.messageToUser || (data.thought ? `Synthesized plan: ${data.thought}` : "Executing autonomous WebMCP tool sequence..."),
           thought: data.thought,
           timestamp: new Date().toLocaleTimeString(),
           toolCalls: [...toolCallsList],
         },
       ]);
 
-      // Sequentially execute tools
+      // Iterative Observe -> Decide -> Act Execution Loop
+      let lastDiscoveredProductId: string | null = null;
+      let lastDiscoveredCategory: string | null = null;
+
       for (let i = 0; i < plan.length; i++) {
         const step = plan[i];
+        
+        // Dynamically wire discovered context if prior step revealed target product
+        const argsToExecute = { ...step.args };
+        if (
+          (step.tool === "inspect_product_details" || step.tool === "add_to_cart" || step.tool === "customize_product_spec") &&
+          (!argsToExecute.productId || argsToExecute.productId === "undefined") &&
+          lastDiscoveredProductId
+        ) {
+          argsToExecute.productId = lastDiscoveredProductId;
+        }
+
         try {
-          const result = await webMCPHost.invokeTool(step.tool, step.args, "agent");
+          const result = await webMCPHost.invokeTool(step.tool, argsToExecute, "agent");
+
+          // Post-Execution Result Validation & Observation
+          if (step.tool === "search_catalog") {
+            const foundProducts = result?.products || [];
+            if (foundProducts.length > 0) {
+              lastDiscoveredProductId = foundProducts[0].id;
+              lastDiscoveredCategory = foundProducts[0].category;
+            }
+          } else if (step.tool === "inspect_product_details" && result?.product) {
+            lastDiscoveredProductId = result.product.id;
+          }
+
           toolCallsList[i] = {
             ...toolCallsList[i],
+            args: argsToExecute,
             result,
             status: "done",
           };
+
           setChatMessages((prev) =>
             prev.map((m) => (m.id === agentMsgId ? { ...m, toolCalls: [...toolCallsList] } : m))
           );
         } catch (err: any) {
+          console.warn(`WebMCP execution issue at step ${i} (${step.tool}):`, err.message || err);
           toolCallsList[i] = {
             ...toolCallsList[i],
+            args: argsToExecute,
             result: { error: err.message || String(err) },
             status: "failed",
           };
+
           setChatMessages((prev) =>
             prev.map((m) => (m.id === agentMsgId ? { ...m, toolCalls: [...toolCallsList] } : m))
           );
+
+          // If HITL security check blocks checkout because human cancelled, halt gracefully
+          if (step.tool === "execute_smart_checkout" && err.message?.includes("SECURITY VIOLATION")) {
+            break;
+          }
         }
       }
     } catch (err: any) {
@@ -1021,7 +1058,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         {
           id: `err-${Date.now()}`,
           sender: "system",
-          text: `⚠️ Agent execution error: ${err.message || String(err)}`,
+          text: `⚠️ Agent orchestration error: ${err.message || String(err)}`,
           timestamp: new Date().toLocaleTimeString(),
         },
       ]);

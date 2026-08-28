@@ -5,6 +5,7 @@
  */
 
 import { WebMCPTool, ToolInvocationLog } from "../types";
+import { validateToolArguments } from "./schemaValidator";
 
 declare global {
   interface Document {
@@ -115,26 +116,45 @@ export class WebMCPHost {
       throw new Error(`WebMCP: Tool '${toolName}' is not registered on document.modelContext.`);
     }
 
+    // Strict JSON Schema Validation
+    const validation = validateToolArguments(toolName, input || {});
+    if (!validation.valid) {
+      const errorMsg = `SCHEMA VALIDATION ERROR for '${toolName}': ${validation.errors.join("; ")}`;
+      const errLog: ToolInvocationLog = {
+        id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        timestamp: new Date().toLocaleTimeString(),
+        toolName,
+        input,
+        output: { error: errorMsg, validationErrors: validation.errors },
+        durationMs: 0,
+        status: "error",
+        invoker,
+      };
+      this.addLog(errLog);
+      throw new Error(errorMsg);
+    }
+
+    const sanitizedInput = validation.sanitizedArgs;
     const startTime = performance.now();
 
     // Dispatch invocation start event
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("modelcontext:toolcalled", {
-          detail: { toolName, input, invoker },
+          detail: { toolName, input: sanitizedInput, invoker },
         })
       );
     }
 
     try {
-      const result = await Promise.resolve(tool.execute(input));
+      const result = await Promise.resolve(tool.execute(sanitizedInput));
       const durationMs = Math.round(performance.now() - startTime);
 
       const successLog: ToolInvocationLog = {
         id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
         timestamp: new Date().toLocaleTimeString(),
         toolName,
-        input,
+        input: sanitizedInput,
         output: result,
         durationMs,
         status: "success",

@@ -63,7 +63,8 @@ export const BenchmarkDashboard: React.FC = () => {
       const data = await res.json();
       const endTime = performance.now();
       const latencyMs = Math.round(endTime - startTime);
-      const invokedTools = (data.plan || []).map((step: any) => step.tool);
+      const invokedSteps = data.steps || data.plan || [];
+      const invokedTools = invokedSteps.map((step: any) => step.tool || step.name).filter(Boolean);
 
       // Verify that at least one of the expected tools was planned or executed
       const passed =
@@ -75,7 +76,7 @@ export const BenchmarkDashboard: React.FC = () => {
         status: passed ? "passed" : "failed",
         actualTools: invokedTools,
         latencyMs,
-        resultOutput: data.messageToUser || data.thought || JSON.stringify(data.plan),
+        resultOutput: data.messageToUser || data.thought || JSON.stringify(invokedSteps),
       };
 
       setTasks((prev) => prev.map((t) => (t.id === taskId ? updatedTask : t)));

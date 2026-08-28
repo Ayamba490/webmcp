@@ -73,7 +73,7 @@ export const Storefront: React.FC = () => {
           </h1>
 
           <p className="text-sm sm:text-base text-white/70 font-normal leading-relaxed max-w-3xl">
-            Exposing 12 structured WebMCP endpoints directly to AI agents via <code className="font-mono text-[#00FF00] bg-black/60 px-2 py-0.5 border border-white/10 font-bold">document.modelContext</code>. Agents search live inventory, negotiate dynamic B2B pricing, customize titanium hardware, and stage checkout with human confirmation.
+            Exposing 14 structured WebMCP endpoints (11 autonomous commerce capabilities + 3 UI & observability tools) directly to AI agents via <code className="font-mono text-[#00FF00] bg-black/60 px-2 py-0.5 border border-white/10 font-bold">document.modelContext</code>. Agents search live inventory, negotiate dynamic B2B pricing, customize titanium hardware, and stage checkout with human confirmation.
           </p>
 
           {/* Bold Metric Grid */}
@@ -82,7 +82,8 @@ export const Storefront: React.FC = () => {
               <div className="text-[9px] uppercase tracking-[0.25em] text-white/40 font-bold mb-1">
                 REGISTERED TOOLS
               </div>
-              <div className="text-3xl sm:text-4xl font-black text-white">13 TOOLS</div>
+              <div className="text-3xl sm:text-4xl font-black text-white">14 TOOLS</div>
+              <div className="text-[9px] text-[#6366F1] font-mono mt-0.5 font-bold uppercase">11 Commerce + 3 UI</div>
             </div>
             <div className="p-4 bg-white/[0.02] border border-white/5">
               <div className="text-[9px] uppercase tracking-[0.25em] text-white/40 font-bold mb-1">

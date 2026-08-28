@@ -5,6 +5,7 @@ import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import { INITIAL_PRODUCTS } from "./src/data/catalog";
 import { SECURITY_PERMISSION_TIERS } from "./src/data/benchmarks";
+import { validateToolArguments } from "./src/lib/schemaValidator";
 
 dotenv.config();
 
@@ -13,8 +14,9 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// Strict WebMCP Allowed Tool Registry
+// Strict WebMCP Allowed Tool Registry (14 Tools: 11 Commerce/Agent Tools + 3 UI/Observability Tools)
 const ALLOWED_WEBMCP_TOOLS = new Set([
+  // 11 Commerce & Hardware Agent Tools
   "search_catalog",
   "inspect_product_details",
   "compare_products",
@@ -23,10 +25,11 @@ const ALLOWED_WEBMCP_TOOLS = new Set([
   "stage_procurement_bundle",
   "negotiate_price_discount",
   "simulate_supply_chain_dispatch",
+  "query_live_metrics",
   "request_human_confirmation",
   "execute_smart_checkout",
+  // 3 UI & Observability Tools
   "trigger_ui_highlight",
-  "query_live_metrics",
   "stream_agent_scratchpad",
   "set_app_theme",
 ]);
@@ -68,6 +71,11 @@ app.get("/api/health", (req, res) => {
     version: "1.0.0-draft",
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
     registeredToolsCount: ALLOWED_WEBMCP_TOOLS.size,
+    toolBreakdown: {
+      commerceAgentTools: 11,
+      uiObservabilityTools: 3,
+      totalTools: 14,
+    },
     timestamp: new Date().toISOString(),
   });
 });
@@ -99,13 +107,23 @@ function validateAndSanitizeToolPlan(steps: any[], declaredTools: any[]): { vali
       continue;
     }
 
-    // 2. Declared Tool Check
+    // 2. Declared Tool Check in document.modelContext
     if (declaredToolNames.size > 0 && !declaredToolNames.has(toolName)) {
       validationErrors.push(`Tool '${toolName}' is not currently exposed in document.modelContext.`);
       continue;
     }
 
-    // 3. Determine Security Tier
+    // 3. Strict JSON Schema Validation against Tool's inputSchema
+    const rawArgs = step.args && typeof step.args === "object" ? { ...step.args } : {};
+    const schemaValidation = validateToolArguments(toolName, rawArgs);
+
+    if (!schemaValidation.valid) {
+      validationErrors.push(`SCHEMA REJECTION for '${toolName}': ${schemaValidation.errors.join("; ")}`);
+      // If validation failed, skip or sanitize
+      continue;
+    }
+
+    // 4. Determine Security Tier
     let securityTier = "GREEN_AUTO";
     if (SECURITY_PERMISSION_TIERS.RED_HITL_REQUIRED.tools.includes(toolName)) {
       securityTier = "RED_HITL_REQUIRED";
@@ -113,12 +131,9 @@ function validateAndSanitizeToolPlan(steps: any[], declaredTools: any[]): { vali
       securityTier = "YELLOW_GUARDRAILED";
     }
 
-    // 4. Schema Arguments Sanitization
-    const args = step.args && typeof step.args === "object" ? { ...step.args } : {};
-
     validatedSteps.push({
       tool: toolName,
-      args,
+      args: schemaValidation.sanitizedArgs,
       purpose: step.purpose || `Execute WebMCP ${toolName}`,
       securityTier,
     });
@@ -166,6 +181,14 @@ ${JSON.stringify(contextState || {}, null, 2)}
 Available product catalog:
 ${JSON.stringify(INITIAL_PRODUCTS.map((p) => ({ id: p.id, name: p.name, category: p.category, price: p.price, rating: p.rating, stock: p.stock })), null, 2)}
 
+Guidelines:
+1. For product search / discovery, invoke search_catalog.
+2. For inspecting specifications, invoke inspect_product_details.
+3. For comparisons, formulate a discovery sequence: search_catalog -> inspect_product_details -> compare_products.
+4. For hardware modifications (materials, engraving, glow), invoke customize_product_spec.
+5. For bulk purchases or discount inquiries, invoke negotiate_price_discount.
+6. For final checkout, ALWAYS invoke request_human_confirmation FIRST before execute_smart_checkout.
+
 Respond with a JSON object containing:
 {
   "thought": "Your high-level reasoning explaining how you are using WebMCP to fulfill the goal",
@@ -200,12 +223,15 @@ Respond with a JSON object containing:
       };
     }
 
-    // Pass through Tool Execution & Schema Validator
+    // Pass through Tool Execution & Strict JSON Schema Validator
     const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan(parsedResult.steps || [], tools);
+
+    // If Gemini plan failed schema validation completely, fallback to catalog engine
+    const finalSteps = validatedSteps.length > 0 ? validatedSteps : validateAndSanitizeToolPlan(generateCatalogDrivenPlan(prompt, tools, contextState), tools).validatedSteps;
 
     res.json({
       thought: parsedResult.thought || `WebMCP reasoning formulated for: ${prompt}`,
-      steps: validatedSteps,
+      steps: finalSteps,
       validationErrors,
       messageToUser: parsedResult.messageToUser || "Executing verified WebMCP tool chain.",
       securityValidated: true,
@@ -216,7 +242,7 @@ Respond with a JSON object containing:
     const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan(fallbackPlan, req.body?.tools || []);
 
     res.status(200).json({
-      thought: "Executed fallback catalog-driven planning engine.",
+      thought: "Executed fallback catalog-driven planning engine with schema validation.",
       steps: validatedSteps,
       validationErrors: [...validationErrors, error.message],
       messageToUser: "Executing resilient WebMCP workflow.",
@@ -264,7 +290,7 @@ app.post("/api/agent/suggest", async (req, res) => {
   }
 });
 
-// Dynamic, Catalog-Driven Planning Engine (Eliminates Hardcoded Product Assumptions)
+// Dynamic, Catalog-Driven Planning Engine (Semantic Scoring & Multi-Step Observability)
 function generateCatalogDrivenPlan(prompt: string, tools: any[], contextState: any) {
   const p = (prompt || "").toLowerCase();
   const steps: any[] = [];
@@ -272,26 +298,37 @@ function generateCatalogDrivenPlan(prompt: string, tools: any[], contextState: a
     ? contextState.products
     : INITIAL_PRODUCTS;
 
-  // 1. Extract Price Constraints (e.g., "under $200", "max $500", "below 300")
+  // 1. Extract Price Constraints (e.g. "under $200", "max $500", "below 300")
   let maxPrice: number | undefined = undefined;
   const priceMatch = p.match(/(?:under|below|max|less than|\$)\s*(\d{2,5})/i);
   if (priceMatch) {
     maxPrice = parseInt(priceMatch[1], 10);
   }
 
-  // 2. Extract Quantity (e.g., "5 units", "2 keyboards", "10x")
+  // 2. Context-Sensitive Quantity Extraction (Avoid matching "5 profiles", "3 presets", "24 hours", etc.)
   let targetQuantity = 1;
-  const qtyMatch = p.match(/\b(\d{1,3})\s*(?:x|units?|items?|keyboards?|headsets?|rings?|servers?|pcs?)?\b/i);
-  if (qtyMatch) {
-    const parsedQty = parseInt(qtyMatch[1], 10);
-    if (parsedQty > 0 && parsedQty <= 100) targetQuantity = parsedQty;
+  const explicitQtyMatch = p.match(/\b(?:qty|quantity|count)\s*[:=]?\s*(\d{1,3})\b/i);
+  const unitQtyMatch = p.match(/\b(\d{1,3})\s*(?:x|units?|items?|keyboards?|headsets?|rings?|servers?|pcs|pieces)\b(?!\s*(?:profiles?|presets?|keys?|pins?|dpi|ghz|hours?|days?|mm|db))/i);
+
+  if (explicitQtyMatch) {
+    const q = parseInt(explicitQtyMatch[1], 10);
+    if (q > 0 && q <= 100) targetQuantity = q;
+  } else if (unitQtyMatch) {
+    const q = parseInt(unitQtyMatch[1], 10);
+    if (q > 0 && q <= 100) targetQuantity = q;
   }
 
-  // 3. Dynamic Catalog Search & Relevance Scoring
+  // 3. Semantic Use-Case Recognition & Product Scoring
+  const isDeveloperUseCase = p.includes("developer") || p.includes("coding") || p.includes("typing") || p.includes("programming") || p.includes("software") || p.includes("engineer");
+  const isAudioUseCase = p.includes("audio") || p.includes("sound") || p.includes("headset") || p.includes("music") || p.includes("planar") || p.includes("driver");
+  const isGamingUseCase = p.includes("gaming") || p.includes("esports") || p.includes("fps") || p.includes("rapid trigger");
+  const isErgonomicUseCase = p.includes("ergonomic") || p.includes("wrist") || p.includes("comfort") || p.includes("hours");
+  const isServerUseCase = p.includes("server") || p.includes("compute") || p.includes("node") || p.includes("cluster");
+
   const searchTokens = p
     .replace(/[^\w\s]/gi, " ")
     .split(/\s+/)
-    .filter((t) => t.length > 2 && !["the", "and", "for", "with", "under", "best", "find", "show", "buy", "get", "add", "all"].includes(t));
+    .filter((t) => t.length > 2 && !["the", "and", "for", "with", "under", "best", "find", "show", "buy", "get", "add", "all", "me"].includes(t));
 
   const scoredProducts = catalog.map((product: any) => {
     let score = 0;
@@ -299,18 +336,30 @@ function generateCatalogDrivenPlan(prompt: string, tools: any[], contextState: a
     const descLower = product.description.toLowerCase();
     const tagLower = (product.tagline || "").toLowerCase();
     const catLower = product.category.toLowerCase();
+    const specsStr = JSON.stringify(product.specs || {}).toLowerCase();
+
+    // Semantic use-case scoring
+    if (isDeveloperUseCase) {
+      if (catLower === "peripherals" || nameLower.includes("keyboard") || descLower.includes("macro") || descLower.includes("typing")) score += 18;
+      if (specsStr.includes("switch") || specsStr.includes("hot-swap")) score += 10;
+    }
+    if (isAudioUseCase && (catLower === "audio" || nameLower.includes("headset") || descLower.includes("planar"))) score += 25;
+    if (isGamingUseCase && (descLower.includes("rapid") || descLower.includes("polling") || descLower.includes("latency"))) score += 20;
+    if (isErgonomicUseCase && (descLower.includes("ergonomic") || descLower.includes("comfort") || nameLower.includes("pointer"))) score += 15;
+    if (isServerUseCase && (catLower === "computing" || nameLower.includes("server"))) score += 30;
 
     // Token matching
     searchTokens.forEach((token: string) => {
-      if (nameLower.includes(token)) score += 10;
+      if (nameLower.includes(token)) score += 12;
       if (catLower.includes(token)) score += 8;
-      if (tagLower.includes(token)) score += 5;
-      if (descLower.includes(token)) score += 2;
+      if (tagLower.includes(token)) score += 6;
+      if (descLower.includes(token)) score += 4;
+      if (specsStr.includes(token)) score += 5;
     });
 
     // Budget filtering penalty
     if (maxPrice !== undefined && product.price > maxPrice) {
-      score -= 50;
+      score -= 60;
     }
 
     // Rating boost
@@ -323,19 +372,40 @@ function generateCatalogDrivenPlan(prompt: string, tools: any[], contextState: a
   const bestMatch = scoredProducts[0]?.product || catalog[0];
   const matchedCategory = bestMatch.category;
 
-  // 4. Comparison Intent Check (e.g. "compare keyboards", "compare best 3")
-  const isCompareIntent = p.includes("compare") || p.includes("versus") || p.includes("vs") || p.includes("comparison");
+  // 4. Comparison Intent Flow: Search -> Inspect -> Compare Matrix
+  const isCompareIntent = p.includes("compare") || p.includes("versus") || p.includes("vs") || p.includes("comparison") || p.includes("matrix");
   if (isCompareIntent) {
     const comparisonCandidates = scoredProducts.slice(0, 3).map((sp: any) => sp.product.id);
     const candidateIds = comparisonCandidates.length >= 2 ? comparisonCandidates : [catalog[0].id, catalog[1].id, catalog[2].id];
+
+    // Step 1: Search Catalog
+    steps.push({
+      tool: "search_catalog",
+      args: {
+        category: matchedCategory,
+        maxPrice,
+        sortBy: "rating",
+      },
+      purpose: `Search and filter candidates in '${matchedCategory}' for spec evaluation`,
+    });
+
+    // Step 2: Inspect Primary Candidate
+    steps.push({
+      tool: "inspect_product_details",
+      args: { productId: bestMatch.id },
+      purpose: `Retrieve detailed specifications and warehouse stock for leader ${bestMatch.name}`,
+    });
+
+    // Step 3: Compare Products Matrix
     steps.push({
       tool: "compare_products",
       args: {
         productIds: candidateIds,
-        criteria: ["price", "rating", "carbonKg", "material", "connectivity"],
+        criteria: ["price", "rating", "carbonKg", "material", "connectivity", "stock"],
       },
-      purpose: `Compare ${candidateIds.length} candidate hardware items across key specifications and value metrics`,
+      purpose: `Build side-by-side spec comparison matrix across ${candidateIds.length} candidate hardware items`,
     });
+
     return steps;
   }
 
@@ -348,7 +418,9 @@ function generateCatalogDrivenPlan(prompt: string, tools: any[], contextState: a
     p.includes("show") ||
     p.includes("best") ||
     p.includes("under") ||
-    p.includes("budget");
+    p.includes("budget") ||
+    p.includes("typing") ||
+    p.includes("developer");
 
   if (isSearchIntent || steps.length === 0) {
     const queryTerm = searchTokens.slice(0, 2).join(" ") || matchedCategory;
@@ -439,7 +511,7 @@ function generateCatalogDrivenPlan(prompt: string, tools: any[], contextState: a
     p.includes("purchase");
 
   if (isCartIntent) {
-    if (p.includes("bundle") || (targetQuantity > 1 && catalog.length > 1)) {
+    if (p.includes("bundle") || (targetQuantity > 1 && catalog.length > 1 && p.includes("team"))) {
       const secondProduct = catalog.find((prod: any) => prod.id !== bestMatch.id) || catalog[1];
       steps.push({
         tool: "stage_procurement_bundle",
@@ -587,4 +659,3 @@ async function startServer() {
 }
 
 startServer();
-

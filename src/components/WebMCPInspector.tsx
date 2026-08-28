@@ -99,7 +99,7 @@ document.modelContext.registerTool({
             </span>
           </div>
           <p className="text-xs text-white/50 uppercase tracking-wider font-mono mt-1">
-            Directly inspect, test, and benchmark the 12 WebMCP tools exposed to AI agents and browser runtime.
+            Directly inspect, test, and benchmark the 14 WebMCP tools (11 Commerce/Agent + 3 UI/Observability) exposed to AI agents on document.modelContext.
           </p>
         </div>
 
@@ -408,6 +408,15 @@ function getDefaultPayloadForTool(name: string): string {
       return JSON.stringify({ query: "keyboard", category: "peripherals", maxPrice: 500, sortBy: "rating" }, null, 2);
     case "inspect_product_details":
       return JSON.stringify({ productId: "prod-keyboard-01" }, null, 2);
+    case "compare_products":
+      return JSON.stringify(
+        {
+          productIds: ["prod-keyboard-01", "prod-audio-02", "prod-wear-03"],
+          criteria: ["price", "rating", "carbonKg", "material", "connectivity", "stock"],
+        },
+        null,
+        2
+      );
     case "customize_product_spec":
       return JSON.stringify(
         {
