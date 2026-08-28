@@ -213,7 +213,22 @@ export const WEBMCP_TOOL_SCHEMAS: Record<string, ToolInputSchema> = {
     required: ["elementId"],
   },
 
-  // 13. stream_agent_scratchpad
+  // 13. stream_agent_activity (Supervision & Live Agent Trace)
+  stream_agent_activity: {
+    type: "object",
+    properties: {
+      activity: { type: "string", description: "Agent activity summary (e.g. '🔎 Searching catalog for keyboards under $200')" },
+      phase: {
+        type: "string",
+        enum: ["DISCOVERY", "INSPECTION", "COMPARISON", "CUSTOMIZATION", "NEGOTIATION", "HUMAN_APPROVAL", "EXECUTION", "COMPLETED"],
+        description: "Supervision lifecycle phase",
+      },
+      details: { type: "string", description: "Optional detailed telemetry or status notes" },
+    },
+    required: ["activity"],
+  },
+
+  // Backward compatible alias
   stream_agent_scratchpad: {
     type: "object",
     properties: {

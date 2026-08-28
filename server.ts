@@ -16,7 +16,7 @@ app.use(express.json());
 
 // Strict WebMCP Allowed Tool Registry (14 Tools: 11 Commerce/Agent Tools + 3 UI/Observability Tools)
 const ALLOWED_WEBMCP_TOOLS = new Set([
-  // 11 Commerce & Hardware Agent Tools
+  // 11 Commerce & Hardware Agent Tools (Product Capabilities)
   "search_catalog",
   "inspect_product_details",
   "compare_products",
@@ -28,9 +28,10 @@ const ALLOWED_WEBMCP_TOOLS = new Set([
   "query_live_metrics",
   "request_human_confirmation",
   "execute_smart_checkout",
-  // 3 UI & Observability Tools
+  // 3 UI & Observability Supervision Tools
   "trigger_ui_highlight",
-  "stream_agent_scratchpad",
+  "stream_agent_activity",
+  "stream_agent_scratchpad", // Backward compatible alias
   "set_app_theme",
 ]);
 
@@ -251,6 +252,149 @@ Respond with a JSON object containing:
   }
 });
 
+// Iterative Multi-Turn Observe-and-Act Endpoint (Real-Time Reactive Loop)
+app.post("/api/agent/step", async (req, res) => {
+  try {
+    const { userGoal, history, tools, contextState, stepIndex = 0 } = req.body || {};
+
+    if (!userGoal || typeof userGoal !== "string") {
+      return res.status(400).json({ error: "Missing or invalid 'userGoal' field in request body" });
+    }
+
+    const ai = getGeminiClient();
+
+    if (!ai) {
+      // Deterministic Observe-and-Act State Machine based on real tool observations
+      const stepDecision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
+      
+      if (stepDecision.done) {
+        return res.json({
+          done: true,
+          thought: stepDecision.thought || "Goal fulfilled through verified WebMCP tool executions.",
+          finalMessage: stepDecision.finalMessage || "Autonomous workflow completed successfully.",
+          historyLength: (history || []).length,
+        });
+      }
+
+      const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan([stepDecision.nextStep], tools || []);
+      
+      return res.json({
+        done: false,
+        thought: stepDecision.thought || `Observed prior state; executing next tool ${stepDecision.nextStep?.tool}.`,
+        nextStep: validatedSteps[0] || stepDecision.nextStep,
+        validationErrors,
+        historyLength: (history || []).length,
+      });
+    }
+
+    // Prepare system instructions for Iterative WebMCP Observe-and-Act Agent
+    const systemInstruction = `You are the WebMCP Observe-and-Act Autonomous Browser Co-Pilot for AuraCommerce.
+You interact directly with the website's document.modelContext tools one step at a time.
+After each tool invocation, you OBSERVE the actual return data and DECIDE the next best action.
+
+Website's declared tools on document.modelContext:
+${JSON.stringify(tools || [], null, 2)}
+
+Current page state:
+${JSON.stringify(contextState || {}, null, 2)}
+
+Available product catalog:
+${JSON.stringify(INITIAL_PRODUCTS.map((p) => ({ id: p.id, name: p.name, category: p.category, price: p.price, rating: p.rating, stock: p.stock })), null, 2)}
+
+Guidelines:
+1. For product search / discovery, invoke search_catalog.
+2. For inspecting specifications, invoke inspect_product_details.
+3. For comparisons, follow: search_catalog -> inspect_product_details -> compare_products.
+4. For hardware modifications (materials, engraving, glow), invoke customize_product_spec.
+5. For bulk purchases or discount inquiries, invoke negotiate_price_discount.
+6. For final checkout, ALWAYS invoke request_human_confirmation FIRST before execute_smart_checkout.
+7. Once the user's objective is fully accomplished, return "done": true with a clear "finalMessage".
+8. DO NOT repeat a tool with identical arguments if it already succeeded in history.
+
+You must respond in JSON with EXACTLY this schema:
+If you need to execute another tool:
+{
+  "done": false,
+  "thought": "Analysis of the user goal and intermediate tool results observed so far",
+  "nextStep": {
+    "tool": "exact_tool_name",
+    "args": { /* parameters matching inputSchema */ },
+    "purpose": "Brief description of this step"
+  }
+}
+
+If all steps to achieve the user's goal are complete:
+{
+  "done": true,
+  "thought": "Summary of observations and fulfilled objectives",
+  "finalMessage": "Clear, friendly, professional explanation to the user of everything executed and the current state."
+}`;
+
+    const promptPayload = `User Goal: "${userGoal}"\n\nExecution History with Tool Return Observations:\n${JSON.stringify(history || [], null, 2)}\n\nStep Index: ${stepIndex}\n\nDecide the next single tool action or return done=true if the goal is satisfied.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.7-flash",
+      contents: promptPayload,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+      },
+    });
+
+    const outputText = response.text || "{}";
+    let decision: any;
+    try {
+      decision = JSON.parse(outputText);
+    } catch {
+      decision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
+    }
+
+    if (decision.done) {
+      return res.json({
+        done: true,
+        thought: decision.thought || "Goal fulfilled across WebMCP runtime.",
+        finalMessage: decision.finalMessage || "Autonomous workflow completed successfully.",
+        historyLength: (history || []).length,
+      });
+    }
+
+    if (decision.nextStep) {
+      const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan([decision.nextStep], tools || []);
+      if (validatedSteps.length > 0) {
+        return res.json({
+          done: false,
+          thought: decision.thought || `Decided next step: ${decision.nextStep.tool}`,
+          nextStep: validatedSteps[0],
+          validationErrors,
+          historyLength: (history || []).length,
+        });
+      }
+    }
+
+    // Fallback if LLM step failed schema validation
+    const fallbackDecision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
+    const { validatedSteps } = validateAndSanitizeToolPlan([fallbackDecision.nextStep], tools || []);
+
+    res.json({
+      done: fallbackDecision.done || false,
+      thought: fallbackDecision.thought,
+      nextStep: validatedSteps[0] || fallbackDecision.nextStep,
+      finalMessage: fallbackDecision.finalMessage,
+      historyLength: (history || []).length,
+    });
+  } catch (error: any) {
+    console.error("Agent step error:", error);
+    const fallbackDecision = getNextIterativeStep(req.body?.userGoal || "", req.body?.history || [], req.body?.tools || [], req.body?.contextState || {});
+    res.json({
+      done: fallbackDecision.done || false,
+      thought: fallbackDecision.thought,
+      nextStep: fallbackDecision.nextStep,
+      finalMessage: fallbackDecision.finalMessage,
+      historyLength: (req.body?.history || []).length,
+    });
+  }
+});
+
 // Quick suggestions endpoint
 app.post("/api/agent/suggest", async (req, res) => {
   try {
@@ -290,7 +434,316 @@ app.post("/api/agent/suggest", async (req, res) => {
   }
 });
 
-// Dynamic, Catalog-Driven Planning Engine (Semantic Scoring & Multi-Step Observability)
+// Dynamic, Catalog-Driven Relevance Engine & State Machine
+function getNextIterativeStep(
+  userGoal: string,
+  history: any[],
+  tools: any[],
+  contextState: any
+): { done: boolean; thought?: string; nextStep?: any; finalMessage?: string } {
+  const p = (userGoal || "").toLowerCase();
+  const catalog = contextState?.products?.length > 0 ? contextState.products : INITIAL_PRODUCTS;
+
+  // Extract Constraints & Intent flags
+  let maxPrice: number | undefined = undefined;
+  const priceMatch = p.match(/(?:under|below|max|less than|\$)\s*(\d{2,5})/i);
+  if (priceMatch) maxPrice = parseInt(priceMatch[1], 10);
+
+  let targetQuantity = 1;
+  const explicitQtyMatch = p.match(/\b(?:qty|quantity|count)\s*[:=]?\s*(\d{1,3})\b/i);
+  const unitQtyMatch = p.match(/\b(\d{1,3})\s*(?:x|units?|items?|keyboards?|headsets?|rings?|servers?|pcs|pieces)\b(?!\s*(?:profiles?|presets?|keys?|pins?|dpi|ghz|hours?|days?|mm|db))/i);
+  if (explicitQtyMatch) {
+    const q = parseInt(explicitQtyMatch[1], 10);
+    if (q > 0 && q <= 100) targetQuantity = q;
+  } else if (unitQtyMatch) {
+    const q = parseInt(unitQtyMatch[1], 10);
+    if (q > 0 && q <= 100) targetQuantity = q;
+  }
+
+  const isCompareIntent = p.includes("compare") || p.includes("versus") || p.includes("vs") || p.includes("comparison") || p.includes("matrix");
+  const isCustomizeIntent = p.includes("customiz") || p.includes("engrav") || p.includes("titanium") || p.includes("obsidian") || p.includes("walnut") || p.includes("glow") || p.includes("firmware") || p.includes("profile");
+  const isCartIntent = p.includes("add") || p.includes("cart") || p.includes("stage") || p.includes("buy") || p.includes("purchase");
+  const isNegotiateIntent = p.includes("negotiat") || p.includes("discount") || p.includes("bulk") || p.includes("b2b");
+  const isLogisticsIntent = p.includes("carbon") || p.includes("logistics") || p.includes("supply") || p.includes("dispatch");
+  const isCheckoutIntent = p.includes("checkout") || p.includes("pay") || p.includes("finalize order") || p.includes("signoff");
+  const isThemeIntent = p.includes("theme") || p.includes("light") || p.includes("dark") || p.includes("contrast");
+
+  // Track what tools have already run in history
+  const executedTools = (history || []).map((h: any) => h.tool || h.name).filter(Boolean);
+  const executedSet = new Set(executedTools);
+
+  // Extract intermediate observations from history
+  let discoveredProducts: any[] = [];
+  let inspectedProduct: any = null;
+  let comparisonWinnerId: string | null = null;
+  let customConfigApplied: any = null;
+  let lastDiscoveredProductId: string | null = null;
+  let humanSignoffResult: any = null;
+
+  for (const h of history || []) {
+    if (h.tool === "search_catalog" && h.result?.products) {
+      discoveredProducts = h.result.products;
+      if (discoveredProducts.length > 0) {
+        lastDiscoveredProductId = discoveredProducts[0].id;
+      }
+    } else if (h.tool === "inspect_product_details" && h.result?.product) {
+      inspectedProduct = h.result.product;
+      lastDiscoveredProductId = inspectedProduct.id;
+    } else if (h.tool === "compare_products" && h.result) {
+      comparisonWinnerId = h.result.winner?.id || h.result.topRatedProduct?.id || lastDiscoveredProductId;
+    } else if (h.tool === "customize_product_spec" && h.result) {
+      customConfigApplied = h.result.appliedConfig;
+    } else if (h.tool === "request_human_confirmation" && h.result) {
+      humanSignoffResult = h.result;
+    }
+  }
+
+  // Find best catalog match using Catalog-Driven Relevance Scoring
+  const searchTokens = p
+    .replace(/[^\w\s]/gi, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 2 && !["the", "and", "for", "with", "under", "best", "find", "show", "buy", "get", "add", "all", "me"].includes(t));
+
+  const scoredProducts = catalog.map((product: any) => {
+    let score = 0;
+    const nameLower = product.name.toLowerCase();
+    const descLower = product.description.toLowerCase();
+    const tagLower = (product.tagline || "").toLowerCase();
+    const catLower = product.category.toLowerCase();
+    const specsStr = JSON.stringify(product.specs || {}).toLowerCase();
+
+    if ((p.includes("keyboard") || p.includes("typing") || p.includes("coding")) && catLower === "peripherals") score += 20;
+    if ((p.includes("audio") || p.includes("sound") || p.includes("headset")) && catLower === "audio") score += 25;
+    if ((p.includes("ring") || p.includes("wearable")) && catLower === "wearables") score += 25;
+    if ((p.includes("server") || p.includes("node") || p.includes("compute")) && catLower === "computing") score += 30;
+
+    searchTokens.forEach((token: string) => {
+      if (nameLower.includes(token)) score += 12;
+      if (catLower.includes(token)) score += 8;
+      if (tagLower.includes(token)) score += 6;
+      if (descLower.includes(token)) score += 4;
+      if (specsStr.includes(token)) score += 5;
+    });
+
+    if (maxPrice !== undefined && product.price > maxPrice) score -= 60;
+    score += (product.rating || 4.5) * 2;
+    return { product, score };
+  });
+
+  scoredProducts.sort((a: any, b: any) => b.score - a.score);
+  const bestMatch = scoredProducts[0]?.product || catalog[0];
+  const targetProductId = comparisonWinnerId || inspectedProduct?.id || lastDiscoveredProductId || bestMatch.id;
+
+  // STEP 1: Search Catalog (if not yet executed)
+  if (!executedSet.has("search_catalog")) {
+    const queryTerm = searchTokens.slice(0, 2).join(" ") || bestMatch.category;
+    return {
+      done: false,
+      thought: `Initiating catalog search for '${queryTerm}' within budget constraints to discover available hardware inventory.`,
+      nextStep: {
+        tool: "search_catalog",
+        args: {
+          query: queryTerm,
+          category: bestMatch.category,
+          maxPrice,
+          sortBy: p.includes("rating") ? "rating" : p.includes("price") ? "price_asc" : undefined,
+        },
+        purpose: `Search live catalog for ${bestMatch.category} hardware matching '${queryTerm}'`,
+      },
+    };
+  }
+
+  // STEP 2: Inspect Hardware Specs
+  if (!executedSet.has("inspect_product_details") && (isCompareIntent || p.includes("inspect") || p.includes("spec") || !executedSet.has("compare_products"))) {
+    return {
+      done: false,
+      thought: `Observed catalog search results (${discoveredProducts.length > 0 ? discoveredProducts.length : 'active'} items). Inspecting technical engineering specs and stock for candidate ${bestMatch.name}.`,
+      nextStep: {
+        tool: "inspect_product_details",
+        args: { productId: bestMatch.id },
+        purpose: `Inspect hardware specifications, switches, and warehouse availability for ${bestMatch.name}`,
+      },
+    };
+  }
+
+  // STEP 3: Multi-Product Spec Comparison
+  if (isCompareIntent && !executedSet.has("compare_products")) {
+    const candidateIds = scoredProducts.slice(0, 3).map((sp: any) => sp.product.id);
+    const validCandidateIds = candidateIds.length >= 2 ? candidateIds : [catalog[0].id, catalog[1].id, catalog[2].id];
+
+    return {
+      done: false,
+      thought: `Observed product specs. Building side-by-side comparison matrix across ${validCandidateIds.length} candidate models to determine highest value hardware.`,
+      nextStep: {
+        tool: "compare_products",
+        args: {
+          productIds: validCandidateIds,
+          criteria: ["price", "rating", "carbonKg", "material", "connectivity", "stock"],
+        },
+        purpose: `Generate comparison matrix with automated AI ranking across candidate models`,
+      },
+    };
+  }
+
+  // STEP 4: Customization
+  if (isCustomizeIntent && !executedSet.has("customize_product_spec")) {
+    let material = "Brushed Titanium";
+    if (p.includes("walnut") || p.includes("wood")) material = "Aerospace Walnut";
+    else if (p.includes("obsidian") || p.includes("black")) material = "Matte Obsidian";
+    else if (p.includes("frost") || p.includes("emerald") || p.includes("green")) material = "Emerald Frost";
+
+    let accentGlow = "Cyan Neon";
+    if (p.includes("amber") || p.includes("solar")) accentGlow = "Solar Amber";
+    else if (p.includes("emerald")) accentGlow = "Emerald";
+    else if (p.includes("violet")) accentGlow = "Vapor Violet";
+
+    let engravingText = "CYBER-2026 // WEBMCP";
+    const quoteMatch = userGoal.match(/["']([^"']{1,24})["']/);
+    if (quoteMatch) engravingText = quoteMatch[1];
+    else if (p.includes("developer") || p.includes("dev")) engravingText = "DEV-SPEED // RUNTIME";
+
+    const firmwareProfile = p.includes("gaming")
+      ? "0.1mm Rapid Trigger Gaming"
+      : p.includes("macro") || p.includes("dev") || p.includes("code")
+      ? "Developer Fast-Macro Profile"
+      : "Standard Balanced";
+
+    return {
+      done: false,
+      thought: `Applying custom engineering specifications (${material}, ${accentGlow}, engraving: '${engravingText}') in the 3D Hardware Studio.`,
+      nextStep: {
+        tool: "customize_product_spec",
+        args: {
+          productId: targetProductId,
+          material,
+          engravingText,
+          accentGlow,
+          firmwareProfile,
+          engravingFont: "JetBrains Mono",
+        },
+        purpose: `Apply custom generative spec to ${targetProductId}`,
+      },
+    };
+  }
+
+  // STEP 5: Add to Cart / Staged Procurement
+  if ((isCartIntent || targetQuantity > 1 || isNegotiateIntent || isCheckoutIntent) && !executedSet.has("add_to_cart") && !executedSet.has("stage_procurement_bundle")) {
+    return {
+      done: false,
+      thought: `Staging ${targetQuantity} unit(s) of configured hardware (${targetProductId}) into the procurement shopping cart.`,
+      nextStep: {
+        tool: "add_to_cart",
+        args: {
+          productId: targetProductId,
+          quantity: targetQuantity,
+          customConfig: customConfigApplied || undefined,
+        },
+        purpose: `Add ${targetQuantity}x ${targetProductId} to procurement cart`,
+      },
+    };
+  }
+
+  // STEP 6: Negotiate Price Discount
+  if (isNegotiateIntent && !executedSet.has("negotiate_price_discount")) {
+    const discountMatch = p.match(/(\d{1,2})%/);
+    const requestedDiscountPct = discountMatch ? parseInt(discountMatch[1], 10) : (targetQuantity >= 5 ? 15 : 10);
+
+    return {
+      done: false,
+      thought: `Executing algorithmic B2B discount negotiation with store pricing engine for ${requestedDiscountPct}% volume discount.`,
+      nextStep: {
+        tool: "negotiate_price_discount",
+        args: {
+          requestedDiscountPct,
+          reasoning: targetQuantity >= 5
+            ? `B2B Enterprise Team Procurement (${targetQuantity} units)`
+            : `Developer Partner Program Evaluation Agreement`,
+        },
+        purpose: `Negotiate ${requestedDiscountPct}% volume discount against margin policy floor`,
+      },
+    };
+  }
+
+  // STEP 7: Simulate Supply Chain Dispatch
+  if (isLogisticsIntent && !executedSet.has("simulate_supply_chain_dispatch")) {
+    return {
+      done: false,
+      thought: `Simulating multi-hub logistics freight routing to optimize for lowest carbon footprint.`,
+      nextStep: {
+        tool: "simulate_supply_chain_dispatch",
+        args: {
+          destinationZip: "94107",
+          warehousePriority: p.includes("carbon") ? "lowest_carbon" : "fastest_speed",
+        },
+        purpose: `Simulate zero-emission multi-hub dispatch to destination postal code`,
+      },
+    };
+  }
+
+  // STEP 8: Request Human Confirmation (HITL Gate)
+  if (isCheckoutIntent && !executedSet.has("request_human_confirmation")) {
+    return {
+      done: false,
+      thought: `Financial transaction threshold reached. Pausing autonomous execution to request cryptographic Human-in-the-Loop approval.`,
+      nextStep: {
+        tool: "request_human_confirmation",
+        args: {
+          action: "checkout_signoff",
+          title: "Authorize Hardware Procurement Order",
+          details: `Authorize payment and escrow lock for staged ${targetQuantity} unit(s) with negotiated discounts.`,
+        },
+        purpose: `Request human executive signoff before financial payment locking`,
+      },
+    };
+  }
+
+  // STEP 9: Execute Checkout (only if human confirmed)
+  if (isCheckoutIntent && executedSet.has("request_human_confirmation") && !executedSet.has("execute_smart_checkout")) {
+    if (humanSignoffResult && humanSignoffResult.approved === false) {
+      return {
+        done: true,
+        thought: "Human operator declined checkout approval. Halting financial execution securely.",
+        finalMessage: "Order checkout was declined by the human operator. Your staged cart remains preserved safely.",
+      };
+    }
+
+    return {
+      done: false,
+      thought: `Human authorization verified. Locking escrow and generating cryptographic order receipt.`,
+      nextStep: {
+        tool: "execute_smart_checkout",
+        args: {
+          customerNotes: "WebMCP verified autonomous dispatch order",
+          paymentMethod: "instant_escrow",
+        },
+        purpose: `Lock escrow payment with cryptographic human signoff token`,
+      },
+    };
+  }
+
+  // Theme Intent
+  if (isThemeIntent && !executedSet.has("set_app_theme")) {
+    const themeId = p.includes("light") ? "clean_light" : p.includes("neon") ? "cyber_neon" : "dark_obsidian";
+    return {
+      done: false,
+      thought: `Adjusting application design theme to ${themeId}.`,
+      nextStep: {
+        tool: "set_app_theme",
+        args: { themeId },
+        purpose: `Switch theme to ${themeId}`,
+      },
+    };
+  }
+
+  // ALL STEPS COMPLETED -> FINALIZE
+  return {
+    done: true,
+    thought: `All objectives for '${userGoal}' have been fulfilled across ${executedTools.length} WebMCP tool invocations.`,
+    finalMessage: `I have completed your autonomous hardware workflow across document.modelContext:\n• Discovered and evaluated hardware (${bestMatch.name})\n• Executed ${executedTools.length} schema-validated WebMCP actions\n• Current status is synchronized across all studio views.`,
+  };
+}
+
+// Dynamic, Catalog-Driven Relevance Planning Engine
 function generateCatalogDrivenPlan(prompt: string, tools: any[], contextState: any) {
   const p = (prompt || "").toLowerCase();
   const steps: any[] = [];

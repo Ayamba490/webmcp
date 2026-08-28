@@ -859,7 +859,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
       },
     });
 
-    // 12. stream_agent_scratchpad
+    // 12. stream_agent_activity (Supervision & Live Activity Trace)
+    host.registerTool({
+      name: "stream_agent_activity",
+      description: "Publish live activity updates, progress markers, and trace events to the supervision feed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          activity: { type: "string", description: "Agent activity summary or milestone text" },
+          phase: {
+            type: "string",
+            enum: ["DISCOVERY", "INSPECTION", "COMPARISON", "CUSTOMIZATION", "NEGOTIATION", "HUMAN_APPROVAL", "EXECUTION", "COMPLETED"],
+            description: "Supervision lifecycle phase",
+          },
+          details: { type: "string", description: "Optional detailed telemetry notes" },
+        },
+        required: ["activity"],
+      },
+      execute: async (input: any) => {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: `trace-${Date.now()}`,
+            sender: "system",
+            text: `📡 [WebMCP Activity (${input.phase || "EXECUTION"})]: ${input.activity}`,
+            timestamp: new Date().toLocaleTimeString(),
+          },
+        ]);
+        return { status: "activity_recorded", activity: input.activity, phase: input.phase || "EXECUTION" };
+      },
+    });
+
+    // Backward compatible alias for stream_agent_scratchpad
     host.registerTool({
       name: "stream_agent_scratchpad",
       description: "Publish intermediate agent reasoning or research notes to the user's live UI scratchpad.",
@@ -925,7 +956,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [addToCart, clearCart, startNegotiation]);
 
-  // Send message to agent with observe-and-adapt execution loop
+  // Send message to agent with iterative observe-and-act execution loop
   const sendAgentMessage = async (userText: string) => {
     if (!userText.trim()) return;
 
@@ -939,6 +970,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setChatMessages((prev) => [...prev, userMsg]);
     setIsAgentRunning(true);
 
+    const agentMsgId = `agent-${Date.now()}`;
+    const toolCallsList: NonNullable<AgentChatMessage["toolCalls"]> = [];
+    const executionHistory: Array<{
+      stepIndex: number;
+      tool: string;
+      args: any;
+      result: any;
+      purpose?: string;
+      status: string;
+    }> = [];
+
+    // Initialize agent message placeholder in UI
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: agentMsgId,
+        sender: "agent",
+        text: "Analyzing goal and formulating first WebMCP action...",
+        timestamp: new Date().toLocaleTimeString(),
+        toolCalls: [],
+      },
+    ]);
+
     try {
       const tools = webMCPHost.getRegisteredTools().map((t) => ({
         name: t.name,
@@ -946,119 +1000,170 @@ export function AppProvider({ children }: { children: ReactNode }) {
         inputSchema: t.inputSchema,
       }));
 
-      const contextState = {
-        currentView,
-        cartCount: cart.length,
-        cartTotal,
-        selectedProduct: selectedProduct ? { id: selectedProduct.id, name: selectedProduct.name, price: selectedProduct.price } : null,
-        activeDiscountPct,
-        products: stateRef.current.products,
-      };
+      let isDone = false;
+      let stepIndex = 0;
+      const MAX_STEPS = 8;
+      let finalSummary = "";
+      let lastThought = "";
 
-      const response = await fetch("/api/agent/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: userText,
-          tools,
-          contextState,
-        }),
-      });
+      while (!isDone && stepIndex < MAX_STEPS) {
+        const contextState = {
+          currentView,
+          cartCount: stateRef.current.cart.length,
+          cartTotal: stateRef.current.cart.reduce((s, i) => s + i.product.price * i.quantity, 0),
+          selectedProduct: stateRef.current.selectedProduct
+            ? {
+                id: stateRef.current.selectedProduct.id,
+                name: stateRef.current.selectedProduct.name,
+                price: stateRef.current.selectedProduct.price,
+              }
+            : null,
+          activeDiscountPct,
+          products: stateRef.current.products,
+        };
 
-      const data = await response.json();
-      const plan = data.plan || data.steps || [];
-      const toolCallsList: NonNullable<AgentChatMessage["toolCalls"]> = [];
-
-      // Initialize tool steps
-      for (const step of plan) {
-        toolCallsList.push({
-          tool: step.tool,
-          args: step.args,
-          purpose: step.purpose,
-          status: "running",
+        const response = await fetch("/api/agent/step", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userGoal: userText,
+            history: executionHistory,
+            tools,
+            contextState,
+            stepIndex,
+          }),
         });
-      }
 
-      const agentMsgId = `agent-${Date.now()}`;
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: agentMsgId,
-          sender: "agent",
-          text: data.messageToUser || (data.thought ? `Synthesized plan: ${data.thought}` : "Executing autonomous WebMCP tool sequence..."),
-          thought: data.thought,
-          timestamp: new Date().toLocaleTimeString(),
-          toolCalls: [...toolCallsList],
-        },
-      ]);
-
-      // Iterative Observe -> Decide -> Act Execution Loop
-      let lastDiscoveredProductId: string | null = null;
-      let lastDiscoveredCategory: string | null = null;
-
-      for (let i = 0; i < plan.length; i++) {
-        const step = plan[i];
-        
-        // Dynamically wire discovered context if prior step revealed target product
-        const argsToExecute = { ...step.args };
-        if (
-          (step.tool === "inspect_product_details" || step.tool === "add_to_cart" || step.tool === "customize_product_spec") &&
-          (!argsToExecute.productId || argsToExecute.productId === "undefined") &&
-          lastDiscoveredProductId
-        ) {
-          argsToExecute.productId = lastDiscoveredProductId;
+        if (!response.ok) {
+          throw new Error(`Agent step API responded with HTTP ${response.status}`);
         }
 
+        const stepData = await response.json();
+        lastThought = stepData.thought || lastThought;
+
+        if (stepData.done) {
+          isDone = true;
+          finalSummary = stepData.finalMessage || "Autonomous workflow completed successfully.";
+          break;
+        }
+
+        const nextStep = stepData.nextStep;
+        if (!nextStep || !nextStep.tool) {
+          isDone = true;
+          finalSummary = stepData.finalMessage || "All available tool operations executed.";
+          break;
+        }
+
+        // Add running step to UI
+        const currentCallIndex = toolCallsList.length;
+        toolCallsList.push({
+          tool: nextStep.tool,
+          args: nextStep.args,
+          purpose: nextStep.purpose || `Executing ${nextStep.tool}`,
+          status: "running",
+        });
+
+        setChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === agentMsgId
+              ? {
+                  ...m,
+                  thought: lastThought,
+                  text: `Executing step ${stepIndex + 1}: ${nextStep.purpose || nextStep.tool}...`,
+                  toolCalls: [...toolCallsList],
+                }
+              : m
+          )
+        );
+
+        // Execute Tool in WebMCP Runtime
         try {
-          const result = await webMCPHost.invokeTool(step.tool, argsToExecute, "agent");
+          const result = await webMCPHost.invokeTool(nextStep.tool, nextStep.args, "agent");
 
-          // Post-Execution Result Validation & Observation
-          if (step.tool === "search_catalog") {
-            const foundProducts = result?.products || [];
-            if (foundProducts.length > 0) {
-              lastDiscoveredProductId = foundProducts[0].id;
-              lastDiscoveredCategory = foundProducts[0].category;
-            }
-          } else if (step.tool === "inspect_product_details" && result?.product) {
-            lastDiscoveredProductId = result.product.id;
-          }
-
-          toolCallsList[i] = {
-            ...toolCallsList[i],
-            args: argsToExecute,
+          toolCallsList[currentCallIndex] = {
+            ...toolCallsList[currentCallIndex],
             result,
             status: "done",
           };
 
+          executionHistory.push({
+            stepIndex,
+            tool: nextStep.tool,
+            args: nextStep.args,
+            result,
+            purpose: nextStep.purpose,
+            status: "done",
+          });
+
           setChatMessages((prev) =>
-            prev.map((m) => (m.id === agentMsgId ? { ...m, toolCalls: [...toolCallsList] } : m))
+            prev.map((m) =>
+              m.id === agentMsgId
+                ? {
+                    ...m,
+                    toolCalls: [...toolCallsList],
+                  }
+                : m
+            )
           );
-        } catch (err: any) {
-          console.warn(`WebMCP execution issue at step ${i} (${step.tool}):`, err.message || err);
-          toolCallsList[i] = {
-            ...toolCallsList[i],
-            args: argsToExecute,
-            result: { error: err.message || String(err) },
+        } catch (execErr: any) {
+          console.warn(`WebMCP tool failure at step ${stepIndex} (${nextStep.tool}):`, execErr);
+
+          toolCallsList[currentCallIndex] = {
+            ...toolCallsList[currentCallIndex],
+            result: { error: execErr.message || String(execErr) },
             status: "failed",
           };
 
+          executionHistory.push({
+            stepIndex,
+            tool: nextStep.tool,
+            args: nextStep.args,
+            result: { error: execErr.message || String(execErr) },
+            purpose: nextStep.purpose,
+            status: "failed",
+          });
+
           setChatMessages((prev) =>
-            prev.map((m) => (m.id === agentMsgId ? { ...m, toolCalls: [...toolCallsList] } : m))
+            prev.map((m) =>
+              m.id === agentMsgId
+                ? {
+                    ...m,
+                    toolCalls: [...toolCallsList],
+                  }
+                : m
+            )
           );
 
-          // If HITL security check blocks checkout because human cancelled, halt gracefully
-          if (step.tool === "execute_smart_checkout" && err.message?.includes("SECURITY VIOLATION")) {
+          if (nextStep.tool === "execute_smart_checkout" && execErr.message?.includes("SECURITY VIOLATION")) {
+            finalSummary = "Autonomous checkout was safely blocked by security gate: Human sign-off was cancelled or missing.";
             break;
           }
         }
+
+        stepIndex++;
       }
+
+      // Update final message
+      setChatMessages((prev) =>
+        prev.map((m) =>
+          m.id === agentMsgId
+            ? {
+                ...m,
+                thought: lastThought,
+                text: finalSummary || `Completed all ${toolCallsList.length} verified WebMCP tool steps.`,
+                toolCalls: [...toolCallsList],
+              }
+            : m
+        )
+      );
     } catch (err: any) {
+      console.error("Observe-and-act agent error:", err);
       setChatMessages((prev) => [
         ...prev,
         {
           id: `err-${Date.now()}`,
           sender: "system",
-          text: `⚠️ Agent orchestration error: ${err.message || String(err)}`,
+          text: `⚠️ Agent runtime error: ${err.message || String(err)}`,
           timestamp: new Date().toLocaleTimeString(),
         },
       ]);

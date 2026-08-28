@@ -17,7 +17,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
-  const { currentView, setCurrentView, cart, activeDiscountPct, theme } = useApp();
+  const { currentView, setCurrentView, cart, activeDiscountPct, theme, sendAgentMessage } = useApp();
   const totalCartItems = cart.reduce((acc, item) => acc + item.quantity, 0);
 
   return (
@@ -107,8 +107,24 @@ export const Header: React.FC<HeaderProps> = ({ onOpenCart }) => {
           })}
         </nav>
 
-        {/* Right Controls: Theme Selector & Cart Trigger */}
+        {/* Right Controls: 90s Demo, Theme Selector & Cart Trigger */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* 90-Second Killer Demo Button */}
+          <button
+            id="header-demo-btn"
+            onClick={() => {
+              setCurrentView("agent_hud");
+              sendAgentMessage(
+                "Find 10 mechanical keyboards for my dev team under $2,000. Search catalog, inspect specs, compare candidates, configure Developer Fast-Macro profile with titanium finish, negotiate 15% discount, and prepare checkout with human confirmation."
+              );
+            }}
+            className="flex items-center gap-1.5 bg-gradient-to-r from-[#6366F1] to-[#4F46E5] hover:from-[#4F46E5] hover:to-[#4338CA] text-white px-3 py-1.5 text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer shadow-md shadow-[#6366F1]/20 active:scale-95 whitespace-nowrap"
+            title="Launch Autonomous 90-Second WebMCP Demo Story"
+          >
+            <Sparkles className="h-3.5 w-3.5 fill-current animate-pulse text-amber-300" />
+            <span className="hidden sm:inline">90s Demo</span>
+          </button>
+
           {/* Theme & Design Switcher Section */}
           <ThemeSelector />
 

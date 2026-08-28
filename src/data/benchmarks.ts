@@ -155,6 +155,7 @@ export const SECURITY_PERMISSION_TIERS = {
       "stage_procurement_bundle",
       "trigger_ui_highlight",
       "query_live_metrics",
+      "stream_agent_activity",
       "stream_agent_scratchpad",
       "set_app_theme",
       "simulate_supply_chain_dispatch",
