@@ -108,6 +108,7 @@ export interface AgentChatMessage {
     purpose?: string;
     status: "running" | "done" | "failed";
   }[];
+  rationale?: string;
   thought?: string;
 }
 

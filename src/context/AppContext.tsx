@@ -1004,7 +1004,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       let stepIndex = 0;
       const MAX_STEPS = 8;
       let finalSummary = "";
-      let lastThought = "";
+      let lastRationale = "";
 
       while (!isDone && stepIndex < MAX_STEPS) {
         const contextState = {
@@ -1039,7 +1039,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
 
         const stepData = await response.json();
-        lastThought = stepData.thought || lastThought;
+        lastRationale = stepData.rationale || stepData.thought || lastRationale;
+
+        if (stepData.error) {
+          isDone = true;
+          finalSummary = stepData.finalMessage || `Safe halt: ${stepData.error}`;
+          break;
+        }
 
         if (stepData.done) {
           isDone = true;
@@ -1068,7 +1074,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             m.id === agentMsgId
               ? {
                   ...m,
-                  thought: lastThought,
+                  rationale: lastRationale,
+                  thought: lastRationale,
                   text: `Executing step ${stepIndex + 1}: ${nextStep.purpose || nextStep.tool}...`,
                   toolCalls: [...toolCallsList],
                 }
@@ -1100,6 +1107,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
               m.id === agentMsgId
                 ? {
                     ...m,
+                    rationale: lastRationale,
+                    thought: lastRationale,
                     toolCalls: [...toolCallsList],
                   }
                 : m
@@ -1128,6 +1137,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
               m.id === agentMsgId
                 ? {
                     ...m,
+                    rationale: lastRationale,
+                    thought: lastRationale,
                     toolCalls: [...toolCallsList],
                   }
                 : m
@@ -1149,7 +1160,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           m.id === agentMsgId
             ? {
                 ...m,
-                thought: lastThought,
+                rationale: lastRationale,
+                thought: lastRationale,
                 text: finalSummary || `Completed all ${toolCallsList.length} verified WebMCP tool steps.`,
                 toolCalls: [...toolCallsList],
               }

@@ -120,13 +120,13 @@ export const AgentHud: React.FC = () => {
                       : "bg-black border border-white/10 text-white/90"
                   }`}
                 >
-                  {/* Agent Thought / Intent header */}
-                  {msg.thought && (
-                    <div className="border border-white/10 bg-white/[0.02] p-3 text-[10px] text-white/60 font-mono">
+                  {/* Agent Action Rationale header */}
+                  {(msg.rationale || msg.thought) && (
+                    <div className="border border-white/10 bg-white/[0.02] p-3 text-[10px] text-white/70 font-mono">
                       <span className="text-[#6366F1] font-bold uppercase tracking-widest block mb-1">
-                        🧠 INTENT SYNTHESIS & REASONING:
+                        💡 WHY THIS ACTION? (RATIONALE):
                       </span>
-                      {msg.thought}
+                      {msg.rationale || msg.thought}
                     </div>
                   )}
 

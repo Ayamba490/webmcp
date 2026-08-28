@@ -270,7 +270,8 @@ app.post("/api/agent/step", async (req, res) => {
       if (stepDecision.done) {
         return res.json({
           done: true,
-          thought: stepDecision.thought || "Goal fulfilled through verified WebMCP tool executions.",
+          rationale: stepDecision.rationale || stepDecision.thought || "Goal fulfilled through verified WebMCP tool executions.",
+          thought: stepDecision.rationale || stepDecision.thought || "Goal fulfilled through verified WebMCP tool executions.",
           finalMessage: stepDecision.finalMessage || "Autonomous workflow completed successfully.",
           historyLength: (history || []).length,
         });
@@ -278,10 +279,24 @@ app.post("/api/agent/step", async (req, res) => {
 
       const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan([stepDecision.nextStep], tools || []);
       
+      // Strict Invariant: Never emit an unvalidated tool step
+      if (!validatedSteps || validatedSteps.length === 0) {
+        return res.json({
+          done: true,
+          error: "Unable to produce a schema-valid WebMCP action.",
+          rationale: "Execution halted safely: Step failed JSON Schema validation.",
+          thought: "Validation guardrail intercepted invalid fallback step.",
+          finalMessage: "Execution halted safely: The planned action did not pass strict WebMCP JSON Schema validation.",
+          validationErrors,
+          historyLength: (history || []).length,
+        });
+      }
+
       return res.json({
         done: false,
-        thought: stepDecision.thought || `Observed prior state; executing next tool ${stepDecision.nextStep?.tool}.`,
-        nextStep: validatedSteps[0] || stepDecision.nextStep,
+        rationale: stepDecision.rationale || stepDecision.thought || `Observed prior state; invoking next tool: document.modelContext.${validatedSteps[0].tool}()`,
+        thought: stepDecision.rationale || stepDecision.thought || `Observed prior state; executing next tool ${validatedSteps[0].tool}.`,
+        nextStep: validatedSteps[0],
         validationErrors,
         historyLength: (history || []).length,
       });
@@ -315,7 +330,7 @@ You must respond in JSON with EXACTLY this schema:
 If you need to execute another tool:
 {
   "done": false,
-  "thought": "Analysis of the user goal and intermediate tool results observed so far",
+  "rationale": "Brief user-facing explanation for why this next tool is being executed (e.g. 'I found 3 candidate models, now inspecting switch specs before comparing.')",
   "nextStep": {
     "tool": "exact_tool_name",
     "args": { /* parameters matching inputSchema */ },
@@ -326,7 +341,7 @@ If you need to execute another tool:
 If all steps to achieve the user's goal are complete:
 {
   "done": true,
-  "thought": "Summary of observations and fulfilled objectives",
+  "rationale": "Summary of observations and fulfilled objectives",
   "finalMessage": "Clear, friendly, professional explanation to the user of everything executed and the current state."
 }`;
 
@@ -352,7 +367,8 @@ If all steps to achieve the user's goal are complete:
     if (decision.done) {
       return res.json({
         done: true,
-        thought: decision.thought || "Goal fulfilled across WebMCP runtime.",
+        rationale: decision.rationale || decision.thought || "Goal fulfilled across WebMCP runtime.",
+        thought: decision.rationale || decision.thought || "Goal fulfilled across WebMCP runtime.",
         finalMessage: decision.finalMessage || "Autonomous workflow completed successfully.",
         historyLength: (history || []).length,
       });
@@ -360,10 +376,11 @@ If all steps to achieve the user's goal are complete:
 
     if (decision.nextStep) {
       const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan([decision.nextStep], tools || []);
-      if (validatedSteps.length > 0) {
+      if (validatedSteps && validatedSteps.length > 0) {
         return res.json({
           done: false,
-          thought: decision.thought || `Decided next step: ${decision.nextStep.tool}`,
+          rationale: decision.rationale || decision.thought || `Decided next step: document.modelContext.${validatedSteps[0].tool}()`,
+          thought: decision.rationale || decision.thought || `Decided next step: ${validatedSteps[0].tool}`,
           nextStep: validatedSteps[0],
           validationErrors,
           historyLength: (history || []).length,
@@ -371,24 +388,75 @@ If all steps to achieve the user's goal are complete:
       }
     }
 
-    // Fallback if LLM step failed schema validation
+    // Fallback if LLM step failed schema validation: strictly validate fallback step
     const fallbackDecision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
-    const { validatedSteps } = validateAndSanitizeToolPlan([fallbackDecision.nextStep], tools || []);
+    if (fallbackDecision.done) {
+      return res.json({
+        done: true,
+        rationale: fallbackDecision.rationale || fallbackDecision.thought || "Goal fulfilled via verified state machine.",
+        thought: fallbackDecision.rationale || fallbackDecision.thought || "Goal fulfilled via verified state machine.",
+        finalMessage: fallbackDecision.finalMessage || "Autonomous workflow completed successfully.",
+        historyLength: (history || []).length,
+      });
+    }
+
+    const { validatedSteps: fallbackValidatedSteps, validationErrors: fallbackErrors } = validateAndSanitizeToolPlan([fallbackDecision.nextStep], tools || []);
+
+    // Strict Invariant: No tool step leaves /api/agent/step unvalidated
+    if (!fallbackValidatedSteps || fallbackValidatedSteps.length === 0) {
+      return res.json({
+        done: true,
+        error: "Unable to produce a schema-valid WebMCP action.",
+        rationale: "Execution halted safely: Candidate action failed schema validation.",
+        thought: "Strict validation invariant triggered.",
+        finalMessage: "Execution halted safely: The planned action did not pass strict WebMCP JSON Schema validation.",
+        validationErrors: fallbackErrors,
+        historyLength: (history || []).length,
+      });
+    }
 
     res.json({
-      done: fallbackDecision.done || false,
-      thought: fallbackDecision.thought,
-      nextStep: validatedSteps[0] || fallbackDecision.nextStep,
-      finalMessage: fallbackDecision.finalMessage,
+      done: false,
+      rationale: fallbackDecision.rationale || fallbackDecision.thought || `Executing verified fallback step: ${fallbackValidatedSteps[0].tool}`,
+      thought: fallbackDecision.rationale || fallbackDecision.thought,
+      nextStep: fallbackValidatedSteps[0],
+      validationErrors: fallbackErrors,
       historyLength: (history || []).length,
     });
   } catch (error: any) {
     console.error("Agent step error:", error);
     const fallbackDecision = getNextIterativeStep(req.body?.userGoal || "", req.body?.history || [], req.body?.tools || [], req.body?.contextState || {});
+    
+    if (fallbackDecision.done) {
+      return res.json({
+        done: true,
+        rationale: fallbackDecision.rationale || fallbackDecision.thought,
+        thought: fallbackDecision.rationale || fallbackDecision.thought,
+        finalMessage: fallbackDecision.finalMessage,
+        historyLength: (req.body?.history || []).length,
+      });
+    }
+
+    const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan([fallbackDecision.nextStep], req.body?.tools || []);
+
+    // Strict Invariant in catch handler
+    if (!validatedSteps || validatedSteps.length === 0) {
+      return res.json({
+        done: true,
+        error: "Unable to produce a schema-valid WebMCP action.",
+        rationale: "Execution halted safely due to runtime error and schema validation failure.",
+        thought: "Catch handler strict validation triggered.",
+        finalMessage: `Autonomous execution halted safely: ${error.message || "Runtime exception occurred."}`,
+        validationErrors,
+        historyLength: (req.body?.history || []).length,
+      });
+    }
+
     res.json({
-      done: fallbackDecision.done || false,
-      thought: fallbackDecision.thought,
-      nextStep: fallbackDecision.nextStep,
+      done: false,
+      rationale: fallbackDecision.rationale || fallbackDecision.thought || `Executing recovered step: ${validatedSteps[0].tool}`,
+      thought: fallbackDecision.rationale || fallbackDecision.thought,
+      nextStep: validatedSteps[0],
       finalMessage: fallbackDecision.finalMessage,
       historyLength: (req.body?.history || []).length,
     });
@@ -440,7 +508,7 @@ function getNextIterativeStep(
   history: any[],
   tools: any[],
   contextState: any
-): { done: boolean; thought?: string; nextStep?: any; finalMessage?: string } {
+): { done: boolean; rationale?: string; thought?: string; nextStep?: any; finalMessage?: string } {
   const p = (userGoal || "").toLowerCase();
   const catalog = contextState?.products?.length > 0 ? contextState.products : INITIAL_PRODUCTS;
 
