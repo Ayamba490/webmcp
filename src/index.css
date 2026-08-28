@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: var(--bg-primary, #050505);
+    color: var(--text-primary, #ffffff);
+    transition: background-color 0.25s ease, color 0.25s ease;
+  }
+
+  h1, h2, .font-heading {
+    font-family: 'Syne', 'Inter', system-ui, sans-serif;
+    letter-spacing: -0.04em;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Theme classes on root/app wrapper */
+.theme-dark_obsidian {
+  --bg-primary: #050505;
+  --bg-secondary: #0d0d0d;
+  --bg-card: #121212;
+  --bg-header: rgba(5, 5, 5, 0.95);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-hover: rgba(255, 255, 255, 0.25);
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.65);
+  --text-muted: rgba(255, 255, 255, 0.4);
+  --accent-color: #6366F1;
+  --accent-hover: #4F46E5;
+}
+
+.theme-clean_light {
+  --bg-primary: #F8FAFC;
+  --bg-secondary: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-header: rgba(248, 250, 252, 0.95);
+  --border-color: rgba(15, 23, 42, 0.12);
+  --border-hover: rgba(15, 23, 42, 0.28);
+  --text-primary: #0F172A;
+  --text-secondary: #334155;
+  --text-muted: #64748B;
+  --accent-color: #4F46E5;
+  --accent-hover: #4338CA;
+}
+
+.theme-cyber_neon {
+  --bg-primary: #020D0A;
+  --bg-secondary: #041813;
+  --bg-card: #06231C;
+  --bg-header: rgba(2, 13, 10, 0.95);
+  --border-color: rgba(16, 185, 129, 0.2);
+  --border-hover: rgba(16, 185, 129, 0.45);
+  --text-primary: #ECFDF5;
+  --text-secondary: #A7F3D0;
+  --text-muted: #6EE7B7;
+  --accent-color: #10B981;
+  --accent-hover: #059669;
+}
+
+.theme-warm_editorial {
+  --bg-primary: #0F0D0B;
+  --bg-secondary: #171410;
+  --bg-card: #201C17;
+  --bg-header: rgba(15, 13, 11, 0.95);
+  --border-color: rgba(245, 158, 11, 0.18);
+  --border-hover: rgba(245, 158, 11, 0.38);
+  --text-primary: #FFFBEB;
+  --text-secondary: #FDE68A;
+  --text-muted: #FCD34D;
+  --accent-color: #F59E0B;
+  --accent-hover: #D97706;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-primary, #050505);
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}

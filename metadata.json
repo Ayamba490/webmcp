@@ -1,0 +1,6 @@
+{
+  "name": "AuraCommerce - WebMCP Multi-Agent Studio",
+  "description": "Spec-compliant WebMCP human-agent collaborative commerce, custom manufacturing studio, dynamic negotiation, and live tool testing suite for the WebMCP Challenge.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
