@@ -47,6 +47,14 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   next(err);
 });
 
+let geminiQuotaCooldownUntil = 0;
+
+function isQuotaExhausted(err: any): boolean {
+  if (!err) return false;
+  const str = String(err?.message || "") + " " + JSON.stringify(err);
+  return str.includes("429") || str.includes("RESOURCE_EXHAUSTED") || str.includes("Quota exceeded") || str.includes("generativelanguage.googleapis.com");
+}
+
 // Lazy-initialize Gemini client with required User-Agent header
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -154,7 +162,7 @@ app.post("/api/agent/run", async (req, res) => {
 
     const ai = getGeminiClient();
 
-    if (!ai) {
+    if (!ai || Date.now() < geminiQuotaCooldownUntil) {
       // Dynamic catalog-driven heuristic planner
       const dynamicPlan = generateCatalogDrivenPlan(prompt, tools, contextState);
       const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan(dynamicPlan, tools);
@@ -238,7 +246,9 @@ Respond with a JSON object containing:
       securityValidated: true,
     });
   } catch (error: any) {
-    console.error("Agent run error:", error);
+    if (isQuotaExhausted(error)) {
+      geminiQuotaCooldownUntil = Date.now() + 60000;
+    }
     const fallbackPlan = generateCatalogDrivenPlan(req.body?.prompt || "", req.body?.tools || [], req.body?.contextState || {});
     const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan(fallbackPlan, req.body?.tools || []);
 
@@ -263,43 +273,30 @@ app.post("/api/agent/step", async (req, res) => {
 
     const ai = getGeminiClient();
 
-    if (!ai) {
-      // Deterministic Observe-and-Act State Machine based on real tool observations
-      const stepDecision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
-      
-      if (stepDecision.done) {
+    // 1. Quota Circuit Breaker: If cooldown is active, immediately bypass remote API and run deterministic state machine
+    if (Date.now() < geminiQuotaCooldownUntil || !ai) {
+      const fallbackDecision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
+      if (fallbackDecision.done) {
         return res.json({
           done: true,
-          rationale: stepDecision.rationale || stepDecision.thought || "Goal fulfilled through verified WebMCP tool executions.",
-          thought: stepDecision.rationale || stepDecision.thought || "Goal fulfilled through verified WebMCP tool executions.",
-          finalMessage: stepDecision.finalMessage || "Autonomous workflow completed successfully.",
+          rationale: fallbackDecision.rationale || fallbackDecision.thought || "Goal fulfilled via verified state machine.",
+          thought: fallbackDecision.rationale || fallbackDecision.thought || "Goal fulfilled via verified state machine.",
+          finalMessage: fallbackDecision.finalMessage || "Autonomous workflow completed successfully.",
           historyLength: (history || []).length,
         });
       }
 
-      const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan([stepDecision.nextStep], tools || []);
-      
-      // Strict Invariant: Never emit an unvalidated tool step
-      if (!validatedSteps || validatedSteps.length === 0) {
+      const { validatedSteps: fallbackValidatedSteps, validationErrors: fallbackErrors } = validateAndSanitizeToolPlan([fallbackDecision.nextStep], tools || []);
+      if (fallbackValidatedSteps && fallbackValidatedSteps.length > 0) {
         return res.json({
-          done: true,
-          error: "Unable to produce a schema-valid WebMCP action.",
-          rationale: "Execution halted safely: Step failed JSON Schema validation.",
-          thought: "Validation guardrail intercepted invalid fallback step.",
-          finalMessage: "Execution halted safely: The planned action did not pass strict WebMCP JSON Schema validation.",
-          validationErrors,
+          done: false,
+          rationale: fallbackDecision.rationale || fallbackDecision.thought || `Invoking WebMCP tool: ${fallbackValidatedSteps[0].tool}`,
+          thought: fallbackDecision.rationale || fallbackDecision.thought,
+          nextStep: fallbackValidatedSteps[0],
+          validationErrors: fallbackErrors,
           historyLength: (history || []).length,
         });
       }
-
-      return res.json({
-        done: false,
-        rationale: stepDecision.rationale || stepDecision.thought || `Observed prior state; invoking next tool: document.modelContext.${validatedSteps[0].tool}()`,
-        thought: stepDecision.rationale || stepDecision.thought || `Observed prior state; executing next tool ${validatedSteps[0].tool}.`,
-        nextStep: validatedSteps[0],
-        validationErrors,
-        historyLength: (history || []).length,
-      });
     }
 
     // Prepare system instructions for Iterative WebMCP Observe-and-Act Agent
@@ -349,12 +346,12 @@ If all steps to achieve the user's goal are complete:
 
     let outputText = "{}";
     
-    // Fast-exec wrapper with 2800ms timeout
-    const callGeminiWithTimeout = async (model: string, timeoutMs = 2800): Promise<string> => {
+    // Fast-exec wrapper with timeout
+    const callGeminiWithTimeout = async (model: string, timeoutMs = 2500): Promise<string> => {
       const timeoutPromise = new Promise<string>((_, reject) =>
         setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs)
       );
-      const apiPromise = ai.models.generateContent({
+      const apiPromise = ai!.models.generateContent({
         model,
         contents: promptPayload,
         config: {
@@ -369,10 +366,15 @@ If all steps to achieve the user's goal are complete:
     try {
       outputText = await callGeminiWithTimeout("gemini-3.7-flash", 2500);
     } catch (genError: any) {
-      console.warn("Primary model timed out or unavailable, trying high-speed backup model:", genError?.message);
+      if (isQuotaExhausted(genError)) {
+        geminiQuotaCooldownUntil = Date.now() + 60000;
+      }
       try {
-        outputText = await callGeminiWithTimeout("gemini-3.1-flash-lite", 1800);
-      } catch {
+        outputText = await callGeminiWithTimeout("gemini-3.1-flash-lite", 1500);
+      } catch (backupError: any) {
+        if (isQuotaExhausted(backupError)) {
+          geminiQuotaCooldownUntil = Date.now() + 60000;
+        }
         outputText = "{}";
       }
     }
