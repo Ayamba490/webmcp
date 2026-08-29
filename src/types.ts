@@ -96,6 +96,30 @@ export interface HumanConfirmationRequest {
   timestamp: string;
 }
 
+export interface EngineTelemetryRecord {
+  primary: {
+    name: string;
+    status: "success" | "failed" | "standby";
+    latencyMs?: number;
+    error?: string;
+  };
+  backup: {
+    name: string;
+    status: "success" | "failed" | "standby";
+    latencyMs?: number;
+    error?: string;
+  };
+  fallback: {
+    name: string;
+    status: "success" | "standby";
+    latencyMs?: number;
+    strategy?: string;
+  };
+  resolvedBy: "primary" | "backup" | "fallback";
+  totalLatencyMs: number;
+  timestamp: string;
+}
+
 export interface AgentChatMessage {
   id: string;
   sender: "human" | "agent" | "system";
@@ -110,6 +134,7 @@ export interface AgentChatMessage {
   }[];
   rationale?: string;
   thought?: string;
+  telemetry?: EngineTelemetryRecord;
 }
 
 export interface NegotiationState {
@@ -177,9 +202,12 @@ export interface BenchmarkTask {
   securityTier: SecurityTier;
   status: "idle" | "running" | "passed" | "failed";
   durationMs?: number;
+  latencyMs?: number;
   actualTools?: string[];
   validationErrors?: string[];
   outputSnippet?: string;
+  resultOutput?: string;
+  telemetry?: EngineTelemetryRecord;
 }
 
 export interface BenchmarkSummary {

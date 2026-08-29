@@ -90,6 +90,7 @@ export const BenchmarkDashboard: React.FC = () => {
         actualTools: invokedTools,
         latencyMs,
         resultOutput: data.messageToUser || data.thought || JSON.stringify(invokedSteps),
+        telemetry: data.telemetry,
       };
 
       setTasks((prev) => prev.map((t) => (t.id === taskId ? updatedTask : t)));
@@ -504,6 +505,59 @@ ${tasks
                         ✓ {tool}
                       </span>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {activeTaskDetails.telemetry && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-[10px] font-mono font-bold uppercase opacity-60 flex items-center gap-1.5">
+                      <ShieldCheck className="h-3 w-3 text-emerald-400" />
+                      Multi-Engine Reliability Telemetry
+                    </label>
+                    <span
+                      className={`px-1.5 py-0.2 text-[8px] font-mono font-bold uppercase ${
+                        activeTaskDetails.telemetry.resolvedBy === "primary"
+                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                          : activeTaskDetails.telemetry.resolvedBy === "backup"
+                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                          : "bg-indigo-500/20 text-indigo-300 border border-indigo-500/40"
+                      }`}
+                    >
+                      {activeTaskDetails.telemetry.resolvedBy === "primary" ? "GEMINI PRIMARY" : activeTaskDetails.telemetry.resolvedBy === "backup" ? "GEMINI BACKUP" : "DETERMINISTIC PLANNER"}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1 p-2 bg-black/40 border border-current/10 font-mono text-[10px]">
+                    <div className="flex items-center justify-between">
+                      <span className="opacity-70">Gemini 3.7 Flash:</span>
+                      {activeTaskDetails.telemetry.primary?.status === "success" ? (
+                        <span className="text-emerald-400 font-bold">✓ {activeTaskDetails.telemetry.primary.latencyMs}ms</span>
+                      ) : activeTaskDetails.telemetry.primary?.status === "failed" ? (
+                        <span className="text-rose-400 font-bold">✗ {activeTaskDetails.telemetry.primary.error || "Failed"}</span>
+                      ) : (
+                        <span className="opacity-40">— Standby</span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="opacity-70">Gemini 3.1 Flash Lite:</span>
+                      {activeTaskDetails.telemetry.backup?.status === "success" ? (
+                        <span className="text-emerald-400 font-bold">✓ {activeTaskDetails.telemetry.backup.latencyMs}ms</span>
+                      ) : activeTaskDetails.telemetry.backup?.status === "failed" ? (
+                        <span className="text-rose-400 font-bold">✗ {activeTaskDetails.telemetry.backup.error || "Failed"}</span>
+                      ) : (
+                        <span className="opacity-40">— Standby</span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="opacity-70">Deterministic WebMCP:</span>
+                      {activeTaskDetails.telemetry.fallback?.status === "success" ? (
+                        <span className="text-indigo-400 font-bold">✓ Active (1ms)</span>
+                      ) : (
+                        <span className="opacity-40">— Standby (0ms)</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}

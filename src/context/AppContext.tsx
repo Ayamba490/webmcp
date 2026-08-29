@@ -1009,6 +1009,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const MAX_STEPS = 8;
       let finalSummary = "";
       let lastRationale = "";
+      let latestTelemetry: any = null;
 
       while (!isDone && stepIndex < MAX_STEPS) {
         const contextState = {
@@ -1053,6 +1054,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           break;
         }
 
+        if (stepData.telemetry) {
+          latestTelemetry = stepData.telemetry;
+        }
+
         lastRationale = stepData.rationale || stepData.thought || lastRationale;
 
         if (stepData.error) {
@@ -1090,6 +1095,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   ...m,
                   rationale: lastRationale,
                   thought: lastRationale,
+                  telemetry: latestTelemetry,
                   text: `Executing step ${stepIndex + 1}: ${nextStep.purpose || nextStep.tool}...`,
                   toolCalls: [...toolCallsList],
                 }
@@ -1123,6 +1129,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     ...m,
                     rationale: lastRationale,
                     thought: lastRationale,
+                    telemetry: latestTelemetry,
                     toolCalls: [...toolCallsList],
                   }
                 : m
@@ -1153,6 +1160,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     ...m,
                     rationale: lastRationale,
                     thought: lastRationale,
+                    telemetry: latestTelemetry,
                     toolCalls: [...toolCallsList],
                   }
                 : m
@@ -1176,6 +1184,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 ...m,
                 rationale: lastRationale,
                 thought: lastRationale,
+                telemetry: latestTelemetry,
                 text: finalSummary || `Completed all ${toolCallsList.length} verified WebMCP tool steps.`,
                 toolCalls: [...toolCallsList],
               }

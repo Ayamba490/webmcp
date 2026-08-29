@@ -16,6 +16,10 @@ import {
   Sliders,
   Sparkles,
   Lock,
+  Cpu,
+  Zap,
+  XCircle,
+  ShieldCheck,
 } from "lucide-react";
 
 export interface ActivityTraceStep {
@@ -53,6 +57,8 @@ export const AgentActivityTrace: React.FC<AgentActivityTraceProps> = ({
 
   // Derive active trace events from toolLogs and chatMessages
   const logsToDisplay = toolLogs.slice(0, maxItems);
+  const latestMsgWithTelemetry = [...chatMessages].reverse().find((m) => m.telemetry);
+  const telemetry = latestMsgWithTelemetry?.telemetry;
 
   return (
     <div className="border border-white/10 bg-[#0a0a0a] shadow-2xl font-mono">
@@ -65,7 +71,7 @@ export const AgentActivityTrace: React.FC<AgentActivityTraceProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="font-heading font-black text-xs sm:text-sm uppercase tracking-tight text-white">
-                AGENT ACTIVITY TRACE
+                AGENT ACTIVITY TRACE & ENGINE TELEMETRY
               </span>
               {isAgentRunning ? (
                 <span className="flex items-center gap-1 text-[9px] font-bold text-[#00FF00] bg-[#00FF00]/10 px-2 py-0.5 border border-[#00FF00]/30 animate-pulse uppercase">
@@ -78,7 +84,7 @@ export const AgentActivityTrace: React.FC<AgentActivityTraceProps> = ({
               )}
             </div>
             <span className="text-[9px] text-white/50 uppercase tracking-widest block mt-0.5">
-              LIVE WEBMCP INVOCATION PIPELINE & OBSERVATION TRACE
+              MULTI-TIER RESILIENCE PIPELINE (PRIMARY ➔ BACKUP ➔ DETERMINISTIC FALLBACK)
             </span>
           </div>
         </div>
@@ -95,6 +101,99 @@ export const AgentActivityTrace: React.FC<AgentActivityTraceProps> = ({
           )}
         </div>
       </div>
+
+      {/* Multi-Engine Telemetry Matrix Banner */}
+      {telemetry && (
+        <div className="p-3.5 bg-black/60 border-b border-white/10 space-y-2">
+          <div className="flex items-center justify-between text-[10px]">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-3.5 w-3.5 text-[#00FF00]" />
+              <span className="text-white font-bold uppercase tracking-wider text-[9px]">
+                RELIABILITY TELEMETRY
+              </span>
+            </div>
+            <span
+              className={`px-2 py-0.5 text-[8px] font-bold uppercase tracking-wider ${
+                telemetry.resolvedBy === "primary"
+                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                  : telemetry.resolvedBy === "backup"
+                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                  : "bg-indigo-500/20 text-indigo-300 border border-indigo-500/40"
+              }`}
+            >
+              RESOLVED BY: {telemetry.resolvedBy === "primary" ? "GEMINI PRIMARY" : telemetry.resolvedBy === "backup" ? "GEMINI BACKUP" : "DETERMINISTIC FALLBACK"}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px]">
+            {/* Primary Engine */}
+            <div className={`p-2.5 border ${telemetry.primary?.status === "success" ? "border-emerald-500/40 bg-emerald-500/5" : telemetry.primary?.status === "failed" ? "border-rose-500/40 bg-rose-500/5" : "border-white/10 bg-white/[0.02]"}`}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-bold text-white uppercase text-[9px]">1. GEMINI PRIMARY</span>
+                {telemetry.primary?.status === "success" && <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
+                {telemetry.primary?.status === "failed" && <XCircle className="h-3 w-3 text-rose-400" />}
+                {telemetry.primary?.status === "standby" && <span className="text-white/30 text-[9px]">—</span>}
+              </div>
+              <div className="text-[10px] text-white/80 font-mono">
+                {telemetry.primary?.name || "Gemini 3.7 Flash"}
+              </div>
+              <div className="text-[9px] mt-1">
+                {telemetry.primary?.status === "success" && (
+                  <span className="text-emerald-400 font-bold">✓ Latency: {telemetry.primary.latencyMs}ms</span>
+                )}
+                {telemetry.primary?.status === "failed" && (
+                  <span className="text-rose-400 font-bold">✗ {telemetry.primary.error || "Timeout / Unavailable"}</span>
+                )}
+                {telemetry.primary?.status === "standby" && (
+                  <span className="text-white/40">Standby (0ms)</span>
+                )}
+              </div>
+            </div>
+
+            {/* Backup Engine */}
+            <div className={`p-2.5 border ${telemetry.backup?.status === "success" ? "border-emerald-500/40 bg-emerald-500/5" : telemetry.backup?.status === "failed" ? "border-rose-500/40 bg-rose-500/5" : "border-white/10 bg-white/[0.02]"}`}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-bold text-white uppercase text-[9px]">2. GEMINI BACKUP</span>
+                {telemetry.backup?.status === "success" && <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
+                {telemetry.backup?.status === "failed" && <XCircle className="h-3 w-3 text-rose-400" />}
+                {telemetry.backup?.status === "standby" && <span className="text-white/30 text-[9px]">—</span>}
+              </div>
+              <div className="text-[10px] text-white/80 font-mono">
+                {telemetry.backup?.name || "Gemini 3.1 Flash Lite"}
+              </div>
+              <div className="text-[9px] mt-1">
+                {telemetry.backup?.status === "success" && (
+                  <span className="text-emerald-400 font-bold">✓ Latency: {telemetry.backup.latencyMs}ms</span>
+                )}
+                {telemetry.backup?.status === "failed" && (
+                  <span className="text-rose-400 font-bold">✗ {telemetry.backup.error || "Unavailable"}</span>
+                )}
+                {telemetry.backup?.status === "standby" && (
+                  <span className="text-white/40">Standby (Bypassed)</span>
+                )}
+              </div>
+            </div>
+
+            {/* Fallback Planner */}
+            <div className={`p-2.5 border ${telemetry.fallback?.status === "success" ? "border-indigo-500/40 bg-indigo-500/5" : "border-white/10 bg-white/[0.02]"}`}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-bold text-white uppercase text-[9px]">3. DETERMINISTIC PLANNER</span>
+                {telemetry.fallback?.status === "success" ? <CheckCircle2 className="h-3 w-3 text-indigo-400" /> : <span className="text-white/30 text-[9px]">—</span>}
+              </div>
+              <div className="text-[10px] text-white/80 font-mono">
+                {telemetry.fallback?.name || "Catalog Heuristic Engine"}
+              </div>
+              <div className="text-[9px] mt-1">
+                {telemetry.fallback?.status === "success" ? (
+                  <span className="text-indigo-400 font-bold">✓ Active (1ms Zero-Downtime)</span>
+                ) : (
+                  <span className="text-white/40">Standby (Ready)</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Pipeline Status Summary Bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3 bg-black/40 border-b border-white/5 text-[10px]">

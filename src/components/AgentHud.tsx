@@ -14,6 +14,10 @@ import {
   MessageSquare,
   Shield,
   Layers,
+  Cpu,
+  Zap,
+  XCircle,
+  ShieldCheck,
 } from "lucide-react";
 import { AgentActivityTrace } from "./AgentActivityTrace";
 
@@ -22,6 +26,7 @@ export const AgentHud: React.FC = () => {
   const [inputQuery, setInputQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"chat" | "trace">("chat");
   const [expandedToolIndex, setExpandedToolIndex] = useState<string | null>(null);
+  const [expandedTelemetryIndex, setExpandedTelemetryIndex] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -191,6 +196,118 @@ export const AgentHud: React.FC = () => {
                           </div>
                         );
                       })}
+                    </div>
+                  )}
+
+                  {/* Multi-Engine Reliability & Telemetry Card */}
+                  {msg.telemetry && (
+                    <div className="border border-white/15 bg-white/[0.03] p-3 text-[10px] font-mono space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                        <div className="flex items-center gap-2">
+                          <ShieldCheck className="h-3.5 w-3.5 text-[#00FF00]" />
+                          <span className="text-[9px] font-bold text-white uppercase tracking-widest">
+                            AI RELIABILITY & ENGINE TELEMETRY
+                          </span>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 text-[8px] font-bold uppercase tracking-wider ${
+                            msg.telemetry.resolvedBy === "primary"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                              : msg.telemetry.resolvedBy === "backup"
+                              ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                              : "bg-indigo-500/20 text-indigo-300 border border-indigo-500/40"
+                          }`}
+                        >
+                          RESOLVED BY: {msg.telemetry.resolvedBy === "primary" ? "GEMINI PRIMARY" : msg.telemetry.resolvedBy === "backup" ? "GEMINI BACKUP" : "DETERMINISTIC FALLBACK"}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-1.5 pt-0.5">
+                        {/* Primary Engine */}
+                        <div className="flex items-center justify-between p-1.5 bg-black/40 border border-white/5">
+                          <div className="flex items-center gap-2">
+                            {msg.telemetry.primary?.status === "success" && (
+                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                            )}
+                            {msg.telemetry.primary?.status === "failed" && (
+                              <XCircle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+                            )}
+                            {msg.telemetry.primary?.status === "standby" && (
+                              <span className="text-white/30 font-bold px-1">—</span>
+                            )}
+                            <span className="font-semibold text-white/90">
+                              {msg.telemetry.primary?.name || "Gemini 3.7 Flash (Primary)"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 font-mono text-[9px]">
+                            {msg.telemetry.primary?.status === "success" && (
+                              <span className="text-emerald-400">✓ {msg.telemetry.primary.latencyMs}ms</span>
+                            )}
+                            {msg.telemetry.primary?.status === "failed" && (
+                              <span className="text-rose-400 max-w-[200px] truncate text-right" title={msg.telemetry.primary.error}>
+                                ✗ {msg.telemetry.primary.error || "Failed / Timeout"}
+                              </span>
+                            )}
+                            {msg.telemetry.primary?.status === "standby" && (
+                              <span className="text-white/40">Standby</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Backup Engine */}
+                        <div className="flex items-center justify-between p-1.5 bg-black/40 border border-white/5">
+                          <div className="flex items-center gap-2">
+                            {msg.telemetry.backup?.status === "success" && (
+                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                            )}
+                            {msg.telemetry.backup?.status === "failed" && (
+                              <XCircle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+                            )}
+                            {msg.telemetry.backup?.status === "standby" && (
+                              <span className="text-white/30 font-bold px-1">—</span>
+                            )}
+                            <span className="font-semibold text-white/90">
+                              {msg.telemetry.backup?.name || "Gemini 3.1 Flash Lite (Backup)"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 font-mono text-[9px]">
+                            {msg.telemetry.backup?.status === "success" && (
+                              <span className="text-emerald-400">✓ {msg.telemetry.backup.latencyMs}ms</span>
+                            )}
+                            {msg.telemetry.backup?.status === "failed" && (
+                              <span className="text-rose-400 max-w-[200px] truncate text-right" title={msg.telemetry.backup.error}>
+                                ✗ {msg.telemetry.backup.error || "Failed"}
+                              </span>
+                            )}
+                            {msg.telemetry.backup?.status === "standby" && (
+                              <span className="text-white/40">Standby (Bypassed)</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Fallback Planner */}
+                        <div className="flex items-center justify-between p-1.5 bg-black/40 border border-white/5">
+                          <div className="flex items-center gap-2">
+                            {msg.telemetry.fallback?.status === "success" && (
+                              <CheckCircle2 className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                            )}
+                            {msg.telemetry.fallback?.status === "standby" && (
+                              <span className="text-white/30 font-bold px-1">—</span>
+                            )}
+                            <span className="font-semibold text-white/90">
+                              {msg.telemetry.fallback?.name || "Deterministic WebMCP Planner"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 font-mono text-[9px]">
+                            {msg.telemetry.fallback?.status === "success" && (
+                              <span className="text-indigo-400">✓ Active ({msg.telemetry.fallback.latencyMs || 1}ms)</span>
+                            )}
+                            {msg.telemetry.fallback?.status === "standby" && (
+                              <span className="text-white/40">Standby (Zero-Downtime Ready)</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )}
 

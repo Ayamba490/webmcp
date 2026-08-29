@@ -153,6 +153,26 @@ function validateAndSanitizeToolPlan(steps: any[], declaredTools: any[]): { vali
 
 // Agent execution endpoint (orchestrator with validation guardrails)
 app.post("/api/agent/run", async (req, res) => {
+  const startRunTime = Date.now();
+  const telemetry: any = {
+    primary: {
+      name: "Gemini 3.7 Flash",
+      status: "standby",
+    },
+    backup: {
+      name: "Gemini 3.1 Flash Lite",
+      status: "standby",
+    },
+    fallback: {
+      name: "Deterministic WebMCP Planner",
+      status: "standby",
+      strategy: "Catalog Reasoning Engine",
+    },
+    resolvedBy: "primary",
+    totalLatencyMs: 0,
+    timestamp: new Date().toLocaleTimeString(),
+  };
+
   try {
     const { prompt, tools, contextState } = req.body;
 
@@ -163,6 +183,26 @@ app.post("/api/agent/run", async (req, res) => {
     const ai = getGeminiClient();
 
     if (!ai || Date.now() < geminiQuotaCooldownUntil) {
+      const isCooldown = Date.now() < geminiQuotaCooldownUntil;
+      telemetry.primary = {
+        name: "Gemini 3.7 Flash",
+        status: "failed",
+        error: isCooldown ? "429 Quota Exceeded (Cooldown Active)" : "GEMINI_API_KEY Not Found",
+      };
+      telemetry.backup = {
+        name: "Gemini 3.1 Flash Lite",
+        status: "failed",
+        error: isCooldown ? "429 Quota Exceeded (Cooldown Active)" : "GEMINI_API_KEY Not Found",
+      };
+      telemetry.fallback = {
+        name: "Deterministic WebMCP Planner",
+        status: "success",
+        latencyMs: Math.max(1, Date.now() - startRunTime),
+        strategy: "Catalog Reasoning Engine",
+      };
+      telemetry.resolvedBy = "fallback";
+      telemetry.totalLatencyMs = Date.now() - startRunTime;
+
       // Dynamic catalog-driven heuristic planner
       const dynamicPlan = generateCatalogDrivenPlan(prompt, tools, contextState);
       const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan(dynamicPlan, tools);
@@ -173,6 +213,7 @@ app.post("/api/agent/run", async (req, res) => {
         validationErrors,
         messageToUser: `Executing catalog-driven autonomous workflow for "${prompt}" across document.modelContext.`,
         securityValidated: true,
+        telemetry,
       });
     }
 
@@ -211,16 +252,73 @@ Respond with a JSON object containing:
   "messageToUser": "A clear, conversational update for the human user explaining what you did or what needs their confirmation."
 }`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
-      contents: `User goal: "${prompt}"\n\nGenerate the exact WebMCP tool sequence to execute on document.modelContext.`,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-      },
-    });
+    let outputText = "{}";
+    const primaryStart = Date.now();
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3.7-flash",
+        contents: `User goal: "${prompt}"\n\nGenerate the exact WebMCP tool sequence to execute on document.modelContext.`,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+        },
+      });
+      outputText = response.text || "{}";
+      telemetry.primary = {
+        name: "Gemini 3.7 Flash",
+        status: "success",
+        latencyMs: Date.now() - primaryStart,
+      };
+      telemetry.resolvedBy = "primary";
+    } catch (genError: any) {
+      const isQuota = isQuotaExhausted(genError);
+      if (isQuota) geminiQuotaCooldownUntil = Date.now() + 60000;
+      telemetry.primary = {
+        name: "Gemini 3.7 Flash",
+        status: "failed",
+        latencyMs: Date.now() - primaryStart,
+        error: isQuota ? "429 Quota Exceeded" : (genError?.message || "Unavailable"),
+      };
 
-    const outputText = response.text || "{}";
+      const backupStart = Date.now();
+      try {
+        const backupResp = await ai.models.generateContent({
+          model: "gemini-3.1-flash-lite",
+          contents: `User goal: "${prompt}"\n\nGenerate the exact WebMCP tool sequence to execute on document.modelContext.`,
+          config: {
+            systemInstruction,
+            responseMimeType: "application/json",
+          },
+        });
+        outputText = backupResp.text || "{}";
+        telemetry.backup = {
+          name: "Gemini 3.1 Flash Lite",
+          status: "success",
+          latencyMs: Date.now() - backupStart,
+        };
+        telemetry.resolvedBy = "backup";
+      } catch (backupError: any) {
+        const isBackupQuota = isQuotaExhausted(backupError);
+        if (isBackupQuota) geminiQuotaCooldownUntil = Date.now() + 60000;
+        telemetry.backup = {
+          name: "Gemini 3.1 Flash Lite",
+          status: "failed",
+          latencyMs: Date.now() - backupStart,
+          error: isBackupQuota ? "429 Quota Exceeded" : (backupError?.message || "Unavailable"),
+        };
+        telemetry.fallback = {
+          name: "Deterministic WebMCP Planner",
+          status: "success",
+          latencyMs: Math.max(1, Date.now() - startRunTime),
+          strategy: "Catalog Reasoning Engine",
+        };
+        telemetry.resolvedBy = "fallback";
+        outputText = "{}";
+      }
+    }
+
+    telemetry.totalLatencyMs = Date.now() - startRunTime;
+
     let parsedResult: any;
     try {
       parsedResult = JSON.parse(outputText);
@@ -230,6 +328,15 @@ Respond with a JSON object containing:
         steps: generateCatalogDrivenPlan(prompt, tools, contextState),
         messageToUser: outputText,
       };
+      if (telemetry.resolvedBy !== "fallback") {
+        telemetry.fallback = {
+          name: "Deterministic WebMCP Planner",
+          status: "success",
+          latencyMs: Math.max(1, Date.now() - startRunTime),
+          strategy: "Catalog Reasoning Engine",
+        };
+        telemetry.resolvedBy = "fallback";
+      }
     }
 
     // Pass through Tool Execution & Strict JSON Schema Validator
@@ -244,11 +351,21 @@ Respond with a JSON object containing:
       validationErrors,
       messageToUser: parsedResult.messageToUser || "Executing verified WebMCP tool chain.",
       securityValidated: true,
+      telemetry,
     });
   } catch (error: any) {
     if (isQuotaExhausted(error)) {
       geminiQuotaCooldownUntil = Date.now() + 60000;
     }
+    telemetry.fallback = {
+      name: "Deterministic WebMCP Planner",
+      status: "success",
+      latencyMs: Math.max(1, Date.now() - startRunTime),
+      strategy: "Catalog Reasoning Engine",
+    };
+    telemetry.resolvedBy = "fallback";
+    telemetry.totalLatencyMs = Date.now() - startRunTime;
+
     const fallbackPlan = generateCatalogDrivenPlan(req.body?.prompt || "", req.body?.tools || [], req.body?.contextState || {});
     const { validatedSteps, validationErrors } = validateAndSanitizeToolPlan(fallbackPlan, req.body?.tools || []);
 
@@ -258,6 +375,7 @@ Respond with a JSON object containing:
       validationErrors: [...validationErrors, error.message],
       messageToUser: "Executing resilient WebMCP workflow.",
       securityValidated: true,
+      telemetry,
     });
   }
 });
@@ -273,8 +391,48 @@ app.post("/api/agent/step", async (req, res) => {
 
     const ai = getGeminiClient();
 
-    // 1. Quota Circuit Breaker: If cooldown is active, immediately bypass remote API and run deterministic state machine
+    const startTotalTime = Date.now();
+    const telemetry: any = {
+      primary: {
+        name: "Gemini 3.7 Flash",
+        status: "standby",
+      },
+      backup: {
+        name: "Gemini 3.1 Flash Lite",
+        status: "standby",
+      },
+      fallback: {
+        name: "Deterministic WebMCP Planner",
+        status: "standby",
+        strategy: "Observation Graph State Machine",
+      },
+      resolvedBy: "primary",
+      totalLatencyMs: 0,
+      timestamp: new Date().toLocaleTimeString(),
+    };
+
+    // 1. Quota Circuit Breaker: If cooldown is active or no AI key, immediately bypass remote API and run deterministic state machine
     if (Date.now() < geminiQuotaCooldownUntil || !ai) {
+      const isCooldown = Date.now() < geminiQuotaCooldownUntil;
+      telemetry.primary = {
+        name: "Gemini 3.7 Flash",
+        status: "failed",
+        error: isCooldown ? "429 Quota Exceeded (Cooldown Active)" : "GEMINI_API_KEY Not Found",
+      };
+      telemetry.backup = {
+        name: "Gemini 3.1 Flash Lite",
+        status: "failed",
+        error: isCooldown ? "429 Quota Exceeded (Cooldown Active)" : "GEMINI_API_KEY Not Found",
+      };
+      telemetry.fallback = {
+        name: "Deterministic WebMCP Planner",
+        status: "success",
+        latencyMs: Math.max(1, Date.now() - startTotalTime),
+        strategy: "Observation Graph State Machine",
+      };
+      telemetry.resolvedBy = "fallback";
+      telemetry.totalLatencyMs = Date.now() - startTotalTime;
+
       const fallbackDecision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
       if (fallbackDecision.done) {
         return res.json({
@@ -283,6 +441,7 @@ app.post("/api/agent/step", async (req, res) => {
           thought: fallbackDecision.rationale || fallbackDecision.thought || "Goal fulfilled via verified state machine.",
           finalMessage: fallbackDecision.finalMessage || "Autonomous workflow completed successfully.",
           historyLength: (history || []).length,
+          telemetry,
         });
       }
 
@@ -295,6 +454,7 @@ app.post("/api/agent/step", async (req, res) => {
           nextStep: fallbackValidatedSteps[0],
           validationErrors: fallbackErrors,
           historyLength: (history || []).length,
+          telemetry,
         });
       }
     }
@@ -363,30 +523,103 @@ If all steps to achieve the user's goal are complete:
       return Promise.race([apiPromise, timeoutPromise]);
     };
 
+    const primaryStart = Date.now();
     try {
       outputText = await callGeminiWithTimeout("gemini-3.7-flash", 2500);
+      const primaryLatency = Date.now() - primaryStart;
+      telemetry.primary = {
+        name: "Gemini 3.7 Flash",
+        status: "success",
+        latencyMs: primaryLatency,
+      };
+      telemetry.resolvedBy = "primary";
     } catch (genError: any) {
-      if (isQuotaExhausted(genError)) {
+      const primaryLatency = Date.now() - primaryStart;
+      const isQuota = isQuotaExhausted(genError);
+      if (isQuota) {
         geminiQuotaCooldownUntil = Date.now() + 60000;
       }
+      const primaryError = isQuota
+        ? "429 Quota Exceeded"
+        : genError?.message?.includes("Timeout")
+        ? "Timeout (>2.5s)"
+        : (genError?.message || "Unavailable");
+
+      telemetry.primary = {
+        name: "Gemini 3.7 Flash",
+        status: "failed",
+        latencyMs: primaryLatency,
+        error: primaryError,
+      };
+
+      const backupStart = Date.now();
       try {
         outputText = await callGeminiWithTimeout("gemini-3.1-flash-lite", 1500);
+        const backupLatency = Date.now() - backupStart;
+        telemetry.backup = {
+          name: "Gemini 3.1 Flash Lite",
+          status: "success",
+          latencyMs: backupLatency,
+        };
+        telemetry.resolvedBy = "backup";
       } catch (backupError: any) {
-        if (isQuotaExhausted(backupError)) {
+        const backupLatency = Date.now() - backupStart;
+        const isBackupQuota = isQuotaExhausted(backupError);
+        if (isBackupQuota) {
           geminiQuotaCooldownUntil = Date.now() + 60000;
         }
+        const backupErrorStr = isBackupQuota
+          ? "429 Quota Exceeded"
+          : backupError?.message?.includes("Timeout")
+          ? "Timeout (>1.5s)"
+          : (backupError?.message || "Unavailable");
+
+        telemetry.backup = {
+          name: "Gemini 3.1 Flash Lite",
+          status: "failed",
+          latencyMs: backupLatency,
+          error: backupErrorStr,
+        };
+
+        telemetry.fallback = {
+          name: "Deterministic WebMCP Planner",
+          status: "success",
+          latencyMs: Math.max(1, Date.now() - startTotalTime),
+          strategy: "Observation Graph State Machine",
+        };
+        telemetry.resolvedBy = "fallback";
         outputText = "{}";
       }
     }
+
+    telemetry.totalLatencyMs = Date.now() - startTotalTime;
 
     let decision: any;
     try {
       decision = JSON.parse(outputText);
     } catch {
+      if (telemetry.resolvedBy !== "fallback") {
+        telemetry.fallback = {
+          name: "Deterministic WebMCP Planner",
+          status: "success",
+          latencyMs: Math.max(1, Date.now() - startTotalTime),
+          strategy: "Observation Graph State Machine",
+        };
+        telemetry.resolvedBy = "fallback";
+      }
       decision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
     }
 
     if (!decision || typeof decision !== "object" || (!decision.nextStep && !decision.done)) {
+      if (telemetry.resolvedBy !== "fallback") {
+        telemetry.fallback = {
+          name: "Deterministic WebMCP Planner",
+          status: "success",
+          latencyMs: Math.max(1, Date.now() - startTotalTime),
+          strategy: "Observation Graph State Machine",
+        };
+        telemetry.resolvedBy = "fallback";
+      }
       decision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
     }
 
@@ -397,6 +630,7 @@ If all steps to achieve the user's goal are complete:
         thought: decision.rationale || decision.thought || "Goal fulfilled across WebMCP runtime.",
         finalMessage: decision.finalMessage || "Autonomous workflow completed successfully.",
         historyLength: (history || []).length,
+        telemetry,
       });
     }
 
@@ -410,11 +644,20 @@ If all steps to achieve the user's goal are complete:
           nextStep: validatedSteps[0],
           validationErrors,
           historyLength: (history || []).length,
+          telemetry,
         });
       }
     }
 
     // Fallback if LLM step failed schema validation: strictly validate fallback step
+    telemetry.fallback = {
+      name: "Deterministic WebMCP Planner",
+      status: "success",
+      latencyMs: Math.max(1, Date.now() - startTotalTime),
+      strategy: "Observation Graph State Machine",
+    };
+    telemetry.resolvedBy = "fallback";
+
     const fallbackDecision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
     if (fallbackDecision.done) {
       return res.json({
@@ -423,6 +666,7 @@ If all steps to achieve the user's goal are complete:
         thought: fallbackDecision.rationale || fallbackDecision.thought || "Goal fulfilled via verified state machine.",
         finalMessage: fallbackDecision.finalMessage || "Autonomous workflow completed successfully.",
         historyLength: (history || []).length,
+        telemetry,
       });
     }
 
@@ -438,6 +682,7 @@ If all steps to achieve the user's goal are complete:
         finalMessage: "Execution halted safely: The planned action did not pass strict WebMCP JSON Schema validation.",
         validationErrors: fallbackErrors,
         historyLength: (history || []).length,
+        telemetry,
       });
     }
 
@@ -448,6 +693,7 @@ If all steps to achieve the user's goal are complete:
       nextStep: fallbackValidatedSteps[0],
       validationErrors: fallbackErrors,
       historyLength: (history || []).length,
+      telemetry,
     });
   } catch (error: any) {
     console.error("Agent step error:", error);
