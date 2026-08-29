@@ -289,6 +289,11 @@ export function validateToolArguments(toolName: string, input: any): ValidationR
 
   // 2. Validate Provided Properties
   for (const [propKey, propVal] of Object.entries(input)) {
+    // Skip undefined or null optional properties
+    if (propVal === undefined || propVal === null) {
+      continue;
+    }
+
     const propSchema = schema.properties[propKey];
 
     // Check if property is known in schema
@@ -300,18 +305,18 @@ export function validateToolArguments(toolName: string, input: any): ValidationR
 
     // Type validation
     if (propSchema.type === "number") {
-      const numVal = typeof propVal === "number" ? propVal : Number(propVal);
-      if (isNaN(numVal)) {
+      const parsedNumber = typeof propVal === "string" ? parseFloat(propVal.replace(/,/g, "")) : Number(propVal);
+      if (isNaN(parsedNumber)) {
         errors.push(`Property '${propKey}' on tool '${toolName}' must be a valid number, received '${propVal}'.`);
         continue;
       }
-      if (propSchema.minimum !== undefined && numVal < propSchema.minimum) {
-        errors.push(`Property '${propKey}' (${numVal}) is below minimum limit (${propSchema.minimum}).`);
+      if (propSchema.minimum !== undefined && parsedNumber < propSchema.minimum) {
+        errors.push(`Property '${propKey}' (${parsedNumber}) is below minimum limit (${propSchema.minimum}).`);
       }
-      if (propSchema.maximum !== undefined && numVal > propSchema.maximum) {
-        errors.push(`Property '${propKey}' (${numVal}) exceeds maximum limit (${propSchema.maximum}).`);
+      if (propSchema.maximum !== undefined && parsedNumber > propSchema.maximum) {
+        errors.push(`Property '${propKey}' (${parsedNumber}) exceeds maximum limit (${propSchema.maximum}).`);
       }
-      sanitizedArgs[propKey] = numVal;
+      sanitizedArgs[propKey] = parsedNumber;
     } else if (propSchema.type === "string") {
       if (typeof propVal !== "string") {
         errors.push(`Property '${propKey}' on tool '${toolName}' must be a string, received ${typeof propVal}.`);

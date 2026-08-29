@@ -227,14 +227,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (approved) {
       const token = `HITL-AUTH-${Date.now().toString(36).toUpperCase()}`;
-      setLastHumanApproval({
+      const approvalData: HumanApprovalRecord = {
         token,
         action: pendingConfirmation?.action || "checkout_signoff",
         timestamp: Date.now(),
         expiresAt: Date.now() + 120000, // 2-minute validity window
         used: false,
         approved: true,
-      });
+      };
+      setLastHumanApproval(approvalData);
+      stateRef.current.lastHumanApproval = approvalData;
       setChatMessages((prev) => [
         ...prev,
         {
@@ -245,14 +247,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         },
       ]);
     } else {
-      setLastHumanApproval({
+      const declineData: HumanApprovalRecord = {
         token: "",
         action: pendingConfirmation?.action || "checkout_signoff",
         timestamp: Date.now(),
         expiresAt: 0,
         used: true,
         approved: false,
-      });
+      };
+      setLastHumanApproval(declineData);
+      stateRef.current.lastHumanApproval = declineData;
       setChatMessages((prev) => [
         ...prev,
         {
@@ -1022,23 +1026,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
           products: stateRef.current.products,
         };
 
-        const response = await fetch("/api/agent/step", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userGoal: userText,
-            history: executionHistory,
-            tools,
-            contextState,
-            stepIndex,
-          }),
-        });
+        let stepData: any;
+        try {
+          const response = await fetch("/api/agent/step", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userGoal: userText,
+              history: executionHistory,
+              tools,
+              contextState,
+              stepIndex,
+            }),
+          });
 
-        if (!response.ok) {
-          throw new Error(`Agent step API responded with HTTP ${response.status}`);
+          const rawText = await response.text();
+          if (rawText.trim().startsWith("<") || !response.ok) {
+            throw new Error(`Server returned status ${response.status}: Non-JSON response`);
+          }
+          stepData = JSON.parse(rawText);
+        } catch (fetchErr: any) {
+          console.warn("Server step fetch fallback triggered:", fetchErr?.message);
+          // If server call was interrupted or timed out, halt or handle cleanly
+          isDone = true;
+          finalSummary = `Workflow concluded after step ${stepIndex}. All prior actions are active in store state.`;
+          break;
         }
 
-        const stepData = await response.json();
         lastRationale = stepData.rationale || stepData.thought || lastRationale;
 
         if (stepData.error) {

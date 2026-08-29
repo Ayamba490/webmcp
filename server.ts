@@ -347,20 +347,44 @@ If all steps to achieve the user's goal are complete:
 
     const promptPayload = `User Goal: "${userGoal}"\n\nExecution History with Tool Return Observations:\n${JSON.stringify(history || [], null, 2)}\n\nStep Index: ${stepIndex}\n\nDecide the next single tool action or return done=true if the goal is satisfied.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
-      contents: promptPayload,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-      },
-    });
+    let outputText = "{}";
+    
+    // Fast-exec wrapper with 2800ms timeout
+    const callGeminiWithTimeout = async (model: string, timeoutMs = 2800): Promise<string> => {
+      const timeoutPromise = new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs)
+      );
+      const apiPromise = ai.models.generateContent({
+        model,
+        contents: promptPayload,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+        },
+      }).then((res) => res.text || "{}");
 
-    const outputText = response.text || "{}";
+      return Promise.race([apiPromise, timeoutPromise]);
+    };
+
+    try {
+      outputText = await callGeminiWithTimeout("gemini-3.7-flash", 2500);
+    } catch (genError: any) {
+      console.warn("Primary model timed out or unavailable, trying high-speed backup model:", genError?.message);
+      try {
+        outputText = await callGeminiWithTimeout("gemini-3.1-flash-lite", 1800);
+      } catch {
+        outputText = "{}";
+      }
+    }
+
     let decision: any;
     try {
       decision = JSON.parse(outputText);
     } catch {
+      decision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
+    }
+
+    if (!decision || typeof decision !== "object" || (!decision.nextStep && !decision.done)) {
       decision = getNextIterativeStep(userGoal, history || [], tools || [], contextState || {});
     }
 
@@ -514,8 +538,11 @@ function getNextIterativeStep(
 
   // Extract Constraints & Intent flags
   let maxPrice: number | undefined = undefined;
-  const priceMatch = p.match(/(?:under|below|max|less than|\$)\s*(\d{2,5})/i);
-  if (priceMatch) maxPrice = parseInt(priceMatch[1], 10);
+  const priceMatch = p.match(/(?:under|below|max|less than|\$)\s*([\d,]{2,7})/i);
+  if (priceMatch) {
+    const rawNum = parseInt(priceMatch[1].replace(/,/g, ""), 10);
+    if (!isNaN(rawNum) && rawNum > 0) maxPrice = rawNum;
+  }
 
   let targetQuantity = 1;
   const explicitQtyMatch = p.match(/\b(?:qty|quantity|count)\s*[:=]?\s*(\d{1,3})\b/i);
@@ -819,11 +846,12 @@ function generateCatalogDrivenPlan(prompt: string, tools: any[], contextState: a
     ? contextState.products
     : INITIAL_PRODUCTS;
 
-  // 1. Extract Price Constraints (e.g. "under $200", "max $500", "below 300")
+  // 1. Extract Price Constraints (e.g. "under $200", "max $500", "below 300", "under $2,000")
   let maxPrice: number | undefined = undefined;
-  const priceMatch = p.match(/(?:under|below|max|less than|\$)\s*(\d{2,5})/i);
+  const priceMatch = p.match(/(?:under|below|max|less than|\$)\s*([\d,]{2,7})/i);
   if (priceMatch) {
-    maxPrice = parseInt(priceMatch[1], 10);
+    const rawNum = parseInt(priceMatch[1].replace(/,/g, ""), 10);
+    if (!isNaN(rawNum) && rawNum > 0) maxPrice = rawNum;
   }
 
   // 2. Context-Sensitive Quantity Extraction (Avoid matching "5 profiles", "3 presets", "24 hours", etc.)
