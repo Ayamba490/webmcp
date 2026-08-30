@@ -403,3 +403,26 @@ export function getClientFallbackStep(
     finalMessage: summary,
   };
 }
+
+export function generateClientCatalogDrivenPlan(
+  userGoal: string,
+  tools: any[],
+  contextState: any
+): Array<{ tool: string; args: any; purpose: string }> {
+  const steps: Array<{ tool: string; args: any; purpose: string }> = [];
+  const fakeHistory: any[] = [];
+  let iter = 0;
+  while (iter < 8) {
+    const decision = getClientFallbackStep(userGoal, fakeHistory, tools, contextState);
+    if (decision.done || !decision.nextStep) break;
+    steps.push(decision.nextStep as any);
+    fakeHistory.push({
+      tool: decision.nextStep.tool,
+      args: decision.nextStep.args,
+      result: { success: true },
+      purpose: decision.nextStep.purpose,
+    });
+    iter++;
+  }
+  return steps;
+}
